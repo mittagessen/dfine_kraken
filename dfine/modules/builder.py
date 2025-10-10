@@ -6,8 +6,6 @@ from .decoder import DFINETransformer
 from .criterion import DFINECriterion
 from .hybrid_encoder import HybridEncoder
 
-from dfine.utils import load_tuning_state
-
 from os import PathLike
 from typing import Optional
 
@@ -27,7 +25,6 @@ def build_model(model_cfg: dict,
     if model_weights:
         if not Path(model_weights).exists():
             raise FileNotFoundError(f"{model_weights} does not exist")
-        model = load_tuning_state(model, model_weights)
     return model
 
 
