@@ -157,7 +157,7 @@ def train(ctx, **kwargs):
         params['valid_regions'] = None
 
     if params['resume']:
-        data_module = RegionDetectionDataModule.load_from_checkpoint(resume)
+        data_module = RegionDetectionDataModule.load_from_checkpoint(params['resume'])
     else:
         data_module = RegionDetectionDataModule(training_data=ground_truth,
                                                 evaluation_data=params.pop('evaluation_files'),
