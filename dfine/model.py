@@ -31,7 +31,7 @@ from kraken.models import create_model
 from kraken.train.utils import configure_optimizer_and_lr_scheduler
 
 from dfine.modules import build_criterion
-from dfine.dataset import XMLDetectionDataset
+from dfine.dataset import XMLDetectionDataset, collate_batch
 from dfine.configs import (DFINESegmentationTrainingDataConfig,
                            DFINESegmentationTrainingConfig)
 
@@ -91,12 +91,12 @@ class DFINESegmentationDataModule(L.LightningDataModule):
             train_set = self._build_dataset(training_data,
                                             augmentation=data_config.augment,
                                             image_size=data_config.image_size,
-                                            class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                            class_mapping={'lines': self.hparams.data_config.line_class_mapping,
                                                            'regions': self.hparams.data_config.region_class_mapping})
             self.train_set = Subset(train_set, range(len(train_set)))
             val_set = self._build_dataset(evaluation_data,
                                           image_size=data_config.image_size,
-                                          class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                          class_mapping={'lines': self.hparams.data_config.line_class_mapping,
                                                          'regions': self.hparams.data_config.region_class_mapping})
 
             self.val_set = Subset(val_set, range(len(val_set)))
@@ -104,7 +104,7 @@ class DFINESegmentationDataModule(L.LightningDataModule):
             train_set = self._build_dataset(training_data,
                                             augmentation=data_config.augment,
                                             image_size=data_config.image_size,
-                                            class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                            class_mapping={'lines': self.hparams.data_config.line_class_mapping,
                                                            'regions': self.hparams.data_config.region_class_mapping})
 
             train_len = int(len(train_set)*data_config.partition)
@@ -134,7 +134,7 @@ class DFINESegmentationDataModule(L.LightningDataModule):
                 raise ValueError('No valid training data provided. Please add some.')
             if len(self.val_set) == 0:
                 raise ValueError('No valid validation data provided. Please add some.')
-            self.hparams.data_config.line_class_mapping = dict(self.train_set.dataset.class_mapping['baselines'])
+            self.hparams.data_config.line_class_mapping = dict(self.train_set.dataset.class_mapping['lines'])
             self.hparams.data_config.region_class_mapping = dict(self.train_set.dataset.class_mapping['regions'])
         elif stage == 'test':
             if len(self.test_data) == 0:
@@ -151,21 +151,22 @@ class DFINESegmentationDataModule(L.LightningDataModule):
                           batch_size=1,
                           num_workers=self.hparams.data_config.num_workers,
                           shuffle=True,
-                          pin_memory=True)
+                          pin_memory=True,
+                          collate_fn=collate_batch)
 
     def val_dataloader(self):
         return DataLoader(self.val_set,
                           shuffle=False,
                           batch_size=1,
                           num_workers=self.hparams.data_config.num_workers,
-                          pin_memory=True)
+                          collate_fn=collate_batch)
 
     def test_dataloader(self):
         return DataLoader(self.test_set,
                           shuffle=False,
                           batch_size=1,
                           num_workers=self.hparams.data_config.num_workers,
-                          pin_memory=True)
+                          collate_fn=collate_batch)
 
 
 class DFINESegmentationModel(L.LightningModule):
@@ -248,11 +249,11 @@ class DFINESegmentationModel(L.LightningModule):
                 set_class_mapping = self.trainer.datamodule.train_set.dataset.class_mapping
 
                 self.net = create_model('DFINEModel',
-                                        model_size=self.hparams.config.model_size,
-                                        img_size=self.trainer.datamodule.hparams.data_config.image_size,
+                                        model_variant=self.hparams.config.model_variant,
+                                        image_size=self.trainer.datamodule.hparams.data_config.image_size,
                                         class_mapping=set_class_mapping)
 
-                self.criterion = build_criterion(model_size=self.hparams.config.model_size,
+                self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
                                                  class_mapping=set_class_mapping)
 
     def on_load_checkpoint(self, checkpoint):
@@ -265,13 +266,13 @@ class DFINESegmentationModel(L.LightningModule):
 
         data_config = checkpoint['datamodule_hyper_parameters']['data_config']
         self.net = create_model('DFINEModel',
-                                model_size=checkpoint['_module_config'].model_size,
-                                img_size=self.trainer.datamodule.hparams.data_config.image_size,
-                                class_mapping={'baselines': data_config.line_class_mapping,
+                                model_variant=checkpoint['_module_config'].model_variant,
+                                image_size=self.trainer.datamodule.hparams.data_config.image_size,
+                                class_mapping={'lines': data_config.line_class_mapping,
                                                'regions': data_config.region_class_mapping})
 
-        self.criterion = build_criterion(model_size=self.hparams.config.model_size,
-                                         class_mapping={'baselines': data_config.line_class_mapping,
+        self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
+                                         class_mapping={'lines': data_config.line_class_mapping,
                                                         'regions': data_config.region_class_mapping})
 
     def on_save_checkpoint(self, checkpoint):

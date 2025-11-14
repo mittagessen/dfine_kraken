@@ -24,14 +24,14 @@ class DFINE(nn.Module, BaseModel):
         A D-FINE object detection model.
 
         Args:
-            model_size: Literal['nano', 'small', 'medium', 'large', 'extra_large'],
+            model_variant: Literal['nano', 'small', 'medium', 'large', 'extra_large'],
             class_mapping: dict[str, dict[str, int]],
             image_size: tuple[int, int]
         """
         super().__init__()
 
-        if (model_size := kwargs.get('model_size', None)) is None:
-            raise ValueError('model_size argument is missing in args.')
+        if (model_variant := kwargs.get('model_variant', None)) is None:
+            raise ValueError('model_variant argument is missing in args.')
         if (class_mapping := kwargs.get('class_mapping', None)) is None:
             raise ValueError('class_mapping argument is missing in args.')
         if (image_size := kwargs.get('image_size', None)) is None:
@@ -41,11 +41,11 @@ class DFINE(nn.Module, BaseModel):
                                               'metrics': []}
         self.user_metadata.update(kwargs)
 
-        model_cfg = models[model_size]
+        model_cfg = models[model_variant]
         model_cfg["HybridEncoder"]["eval_spatial_size"] = image_size 
         model_cfg["DFINETransformer"]["eval_spatial_size"] = image_size 
         # rather highest class index 
-        num_classes = max(max(v.values()) for v in class_mapping.values())
+        num_classes = max(max(v.values()) if v else 0 for v in class_mapping.values())
 
         self.backbone = HGNetv2(**model_cfg["HGNetv2"])
         self.encoder = HybridEncoder(**model_cfg["HybridEncoder"])

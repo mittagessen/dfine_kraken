@@ -126,7 +126,6 @@ logging.getLogger("lightning.fabric.utilities.seed").setLevel(logging.ERROR)
               'sharing a prefix up to the last extension with JSON `.path` files '
               'containing the baseline information.')
 @click.option('--augment/--no-augment', help='Enable image augmentation')
-@click.option('--validate-before-train/--no-validate-before-train', default=True, help='Enables validation run before first training run.')
 @click.option('--line-class-mapping', type=click.UNPROCESSED, hidden=True)
 @click.option('--region-class-mapping', type=click.UNPROCESSED, hidden=True)
 @click.argument('ground_truth', nargs=-1, callback=_expand_gt, type=click.Path(exists=False, dir_okay=False))
@@ -166,7 +165,7 @@ def train(ctx, **kwargs):
     import torch
 
     from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrainingDataConfig
-    from dfine.model import DFINEDetectionDataModule, DFINEDetectionModel
+    from dfine.model import DFINESegmentationDataModule, DFINESegmentationModel
 
     from lightning.pytorch import Trainer
     from lightning.pytorch.callbacks import RichModelSummary, ModelCheckpoint, RichProgressBar
@@ -209,8 +208,8 @@ def train(ctx, **kwargs):
         data_module = DFINESegmentationDataModule(dm_config)
 
     message('Training line types:')
-    for k, v in data_module.train_set.dataset.class_mapping['baselines'].items():
-        message(f'  {k}\t{v}\t{data_module.train_set.dataset.class_stats["baselines"][k]}')
+    for k, v in data_module.train_set.dataset.class_mapping['lines'].items():
+        message(f'  {k}\t{v}\t{data_module.train_set.dataset.class_stats["lines"][k]}')
     message('Training region types:')
     for k, v in data_module.train_set.dataset.class_mapping['regions'].items():
         message(f'  {k}\t{v}\t{data_module.train_set.dataset.class_stats["regions"][k]}')
@@ -252,12 +251,10 @@ def train(ctx, **kwargs):
     except ValueError:
         raise click.UsageError('weights_format', 'Unknown format `{params.get("weights_format")}` for weights.')
 
-    with threadpool_limits(limits=ctx.meta['threads']):
-        if params['resume']:
-            trainer.fit(model, data_module, ckpt_path=params['resume'])
+    with threadpool_limits(limits=ctx.meta['num_threads']):
+        if resume:
+            trainer.fit(model, data_module, ckpt_path=resume)
         else:
-            if params['validate_before_train']:
-                trainer.validate(model, data_module)
             trainer.fit(model, data_module)
 
     score = checkpoint_callback.best_model_score.item()

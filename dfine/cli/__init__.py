@@ -73,7 +73,7 @@ def dfine(ctx, **kwargs):
         seed_everything(42, workers=True)
 
     try:
-        ctx.meta['accelerator'], ctx.meta['device'] = to_ptl_device(params['device'])
+        ctx.meta['accelerator'], ctx.meta['devices'] = to_ptl_device(params['device'])
     except Exception as e:
         raise click.BadOptionUsage('device', str(e))
 

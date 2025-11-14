@@ -6,12 +6,12 @@ class DFINESegmentationTrainingConfig(TrainingConfig):
     Base configuration for training a D-FINE segmentation model.
 
     Args:
-        model_size (Literal[], defaults to medium):
+        model_variant (Literal[], defaults to medium):
             D-FINE model variant
         num_top_queries (int, defaults to 300):
     """
     def __init__(self, **kwargs):
-        self.model = kwargs.pop('model_size', 'medium')
+        self.model_variant = kwargs.pop('model_variant', 'medium')
         self.num_top_queries = kwargs.pop('num_top_queries', 300)
 
         kwargs.setdefault('quit', 'fixed')
@@ -23,11 +23,14 @@ class DFINESegmentationTrainingConfig(TrainingConfig):
 
 class DFINESegmentationTrainingDataConfig(SegmentationTrainingDataConfig):
     """
-    Base data configuration for a D-FINE segmentation model.
+    Base data configuration for a D-FINE segmentation model.  Per default it
+    only trains regions and filters out all lines.
     """
     def __init__(self, **kwargs):
         self.image_size = kwargs.pop('image_size', (320, 320))
         kwargs.setdefault('batch_size', 16)
+        kwargs.setdefault('line_class_mapping', {})
+
         super().__init__(**kwargs)
 
 

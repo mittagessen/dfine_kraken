@@ -1,4 +1,4 @@
 from .hgnetv2 import *
 from .decoder import *
 from .hybrid_encoder import *
-from .builder import build_criterion, build_optimizer
+from .builder import build_criterion

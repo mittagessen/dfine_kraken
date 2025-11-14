@@ -17,26 +17,24 @@ import torch
 import random
 import logging
 import numpy as np
-import lightning as L
 import albumentations as A
 
-from kraken.lib.xml import XMLPage
+from PIL import Image
+from typing import TYPE_CHECKING
 from collections import defaultdict
 
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Dataset, DataLoader
+from kraken.lib.dataset.utils import _get_type
 
-from typing import Optional, Union, TYPE_CHECKING
-from collections.abc import Iterable, Sequence
-
+from torch.utils.data import Dataset
+from collections.abc import Iterable
 from albumentations.pytorch.transforms import ToTensorV2
 
 from dfine.configs import AUGMENTATION_CONFIG
 
-if TYPE_CHECKING:
-    from os import PathLike
-
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from kraken.containers import Segmentation
 
 
 def filter_bboxes(bboxes: torch.Tensor) -> torch.Tensor:
@@ -104,34 +102,19 @@ class XMLDetectionDataset(Dataset):
     Output bbox are in xyxy format.
 
     Args:
-        valid_regions:
-        merge_regions:
-        merge_all_regions:
-        class_mapping:
+        class_mapping: dictionary with two
     """
     def __init__(self,
-                 valid_regions: Optional[Sequence[str]] = None,
-                 merge_regions: Optional[dict[str, Sequence[str]]] = None,
-                 merge_all_regions: Optional[str] = None,
-                 class_mapping: Optional[dict[str, int]] = None,
+                 class_mapping: dict[str, dict[str, int]],
                  augmentation: bool = False,
                  augmentation_config: dict = AUGMENTATION_CONFIG,
                  image_size: tuple[int, int] = (1280, 1280)):
         super().__init__()
-        if class_mapping:
-            self.class_mapping = class_mapping
-            self.num_classes = len(self.class_mapping)
-            self.freeze_cls_map = True
-        else:
-            self.class_mapping = {}
-            self.num_classes = 0
-            self.freeze_cls_map = False
+        self.class_mapping = class_mapping
+        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values())
 
-        self.class_stats = defaultdict(int)
-
-        self.mreg_dict = merge_regions if merge_regions is not None else {}
-        self.valid_regions = valid_regions
-        self.merge_all_regions = merge_all_regions
+        self.failed_samples = set()
+        self.class_stats = {'lines': defaultdict(int), 'regions': defaultdict(int)}
 
         self.image_size = image_size
         self.norm = ([0, 0, 0], [1, 1, 1])
@@ -145,7 +128,7 @@ class XMLDetectionDataset(Dataset):
                                                         target_size=image_size),
                                                A.Normalize(mean=self.norm[0], std=self.norm[1]),
                                                ToTensorV2()],
-                                              bbox_params=A.BboxParams(format="yolo", label_fields=["labels"]))
+                                              bbox_params=A.BboxParams(format="yolo", label_fields=["labels"], clip=True))
 
             self.transforms = A.Compose([A.CoarseDropout(
                                              num_holes_range=(1, 2),
@@ -175,42 +158,46 @@ class XMLDetectionDataset(Dataset):
                                          A.Resize(self.image_size[0], self.image_size[1], interpolation=cv2.INTER_AREA),
                                          A.Normalize(mean=self.norm[0], std=self.norm[1]),
                                          ToTensorV2()],
-                                        bbox_params=A.BboxParams(format="yolo", label_fields=["labels"]))
+                                        bbox_params=A.BboxParams(format="yolo", label_fields=["labels"], clip=True))
         else:
             self.transforms = A.Compose([A.Resize(self.image_size[0], self.image_size[1], interpolation=cv2.INTER_AREA),
                                          A.Normalize(mean=self.norm[0], std=self.norm[1]),
                                          ToTensorV2()],
-                                        bbox_params=A.BboxParams(format="yolo", label_fields=["labels"]))
+                                        bbox_params=A.BboxParams(format="yolo", label_fields=["labels"], clip=True))
 
         self.targets = []
         self.imgs = []
 
-    def add(self, doc: 'XMLPage'):
+    def add(self, doc: 'Segmentation'):
         """
         Adds a page to the dataset.
 
         Args:
-            doc: An XMLPage parser class.
+            doc: a Segmentation object.
         """
-        regions_ = defaultdict(list)
-        wh = doc.image_size
-        for k, v in doc._regions.items():
-            v = torch.Tensor([polygon_to_cxcywh(x.boundary, wh) for x in v if x.boundary])
-            # v = filter_bboxes(torch.Tensor(v))
+        wh = Image.open(doc.imagename).size
 
-            if self.valid_regions is None or k in self.valid_regions:
-                reg_type = self.mreg_dict.get(k, k)
-                if self.merge_all_regions:
-                    reg_type = self.merge_all_regions
-                if reg_type not in self.class_mapping and self.freeze_cls_map:
-                    continue
-                elif reg_type not in self.class_mapping:
-                    self.num_classes += 1
-                    self.class_mapping[reg_type] = self.num_classes - 1
-                regions_[reg_type].extend(v)
-                self.class_stats[reg_type] += len(v)
-        self.targets.append(dict(regions_))
+        objs = defaultdict(list)
+        for line in doc.lines:
+            tag = _get_type(line.tags)
+            try:
+                idx = self.class_mapping['lines'][tag]
+                objs[idx].append(polygon_to_cxcywh(line.boundary, wh))
+                self.class_stats['lines'][idx] += 1
+            except KeyError:
+                continue
+
+        for k, v in doc.regions.items():
+            try:
+                idx = self.class_mapping['regions'][k]
+                v = torch.Tensor([polygon_to_cxcywh(x.boundary, wh) for x in v if x.boundary])
+                objs[idx].extend(v)
+                self.class_stats['regions'][idx] += len(v)
+            except KeyError:
+                continue
+        self.targets.append(objs)
         self.imgs.append(doc.imagename)
+        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values())
 
     def _get_sample(self, idx):
         image = cv2.imread(self.imgs[idx])
@@ -220,7 +207,7 @@ class XMLDetectionDataset(Dataset):
         bboxes = []
 
         for k, v in self.targets[idx].items():
-            labels.extend(len(v) * [self.class_mapping[k]])
+            labels.extend(len(v) * [k])
             bboxes.extend(v)
 
         return {'image': image,
@@ -245,6 +232,3 @@ class XMLDetectionDataset(Dataset):
 
     def close_mosaic(self):
         self.mosaic_prob = 0.0
-
-
-
