@@ -36,6 +36,7 @@ logging.getLogger("lightning.fabric.utilities.seed").setLevel(logging.ERROR)
 
 
 @click.command('train')
+@click.option('-B', '--batch-size', type=int, help='batch sample size')
 @click.option('-o', '--output', 'checkpoint_path', type=click.Path(), default='model', help='Output checkpoint path')
 @click.option('--weights-format', default='safetensors', help='Output weights format.')
 @click.option('-i', '--load', type=click.Path(exists=True, readable=True), help='Load existing file to continue training')
