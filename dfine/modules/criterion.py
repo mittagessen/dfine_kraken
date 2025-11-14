@@ -14,35 +14,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 
+from typing import Literal, Optional
+
 from .utils import bbox2distance, box_cxcywh_to_xyxy, box_iou, generalized_box_iou
 from .dist_utils import get_world_size, is_dist_available_and_initialized
 
 
 class DFINECriterion(nn.Module):
-    """This class computes the loss for D-FINE."""
+    def __init__(self,
+                 matcher: nn.Module,
+                 weight_dict: dict[str, float],
+                 losses: list[str],
+                 alpha: float = 0.2,
+                 gamma: float = 2.0,
+                 num_classes: int = 80,
+                 reg_max: int = 32,
+                 boxes_weight_format: Optional[Literal['iou', 'giou']] = None,
+                 share_matched_indices: bool = False,
+                 label_smoothing: float = 0.0):
+        """
+        The criterion computing the loss for D-FINE.
 
-    __share__ = [
-        "num_classes",
-    ]
-    __inject__ = [
-        "matcher",
-    ]
-
-    def __init__(
-        self,
-        matcher,
-        weight_dict,
-        losses,
-        alpha=0.2,
-        gamma=2.0,
-        num_classes=80,
-        reg_max=32,
-        boxes_weight_format=None,
-        share_matched_indices=False,
-        label_smoothing: float = 0.0,
-    ):
-        """Create the criterion.
-        Parameters:
+        Args:
             matcher: module able to compute a matching between targets and proposals.
             weight_dict: dict containing as key the names of the losses and as values their relative weight.
             losses: list of all the losses to be applied. See get_loss for list of available losses.

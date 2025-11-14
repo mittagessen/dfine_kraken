@@ -19,72 +19,183 @@ import torch
 import logging
 import lightning.pytorch as L
 
+from typing import TYPE_CHECKING, Optional, Union
 from torch.optim import lr_scheduler
-
-from typing import Literal
-
 from torchvision.ops import box_convert
+from lightning.pytorch.callbacks import EarlyStopping
 from torchmetrics.detection import MeanAveragePrecision
+from torch.utils.data import DataLoader, Subset, random_split
 
-from dfine.configs import models
-from dfine.modules import build_model, build_criterion
+from kraken.lib.xml import XMLPage
+from kraken.models import create_model
+from kraken.train.utils import configure_optimizer_and_lr_scheduler
+
+from dfine.modules import build_criterion
+from dfine.dataset import XMLDetectionDataset
+from dfine.configs import (DFINESegmentationTrainingDataConfig,
+                           DFINESegmentationTrainingConfig)
+
+if TYPE_CHECKING:
+    from os import PathLike
+    from kraken.models import BaseModel
+    from kraken.containers import Segmentation
 
 logger = logging.getLogger(__name__)
 
 
-#@torch.compile()
+__all__ = ['DFINESegmentationDataModule', 'DFINESegmentationModel']
+
+
+@torch.compile()
 def model_step(model, criterion, batch):
     o = model(batch['images'], targets=batch['target'])
     return criterion(outputs=o, targets=batch['target'])
 
 
-class RegionDetectionModel(L.LightningModule):
+class DFINESegmentationDataModule(L.LightningDataModule):
+    def __init__(self,
+                 data_config: DFINESegmentationTrainingDataConfig):
+        super().__init__()
+        self.save_hyperparameters()
+
+        all_files = [getattr(data_config, x) for x in ['training_data', 'evaluation_data', 'test_data']]
+
+        if data_config.format_type in ['xml', 'page', 'alto']:
+
+            def _parse_xml_set(ds_type, dataset) -> list[dict[str, 'Segmentation']]:
+                if not dataset:
+                    return None
+                logger.info(f'Parsing {len(dataset) if dataset else 0} XML files for {ds_type} data')
+                data = []
+                for pos, file in enumerate(dataset):
+                    try:
+                        data.append(XMLPage(file, filetype=data_config.format_type).to_container())
+                    except Exception as e:
+                        logger.warning(f'Failed to parse {file}: {e}')
+                return data
+
+            training_data = _parse_xml_set('training', all_files[0])
+            evaluation_data = _parse_xml_set('evaluation', all_files[1])
+            self.test_data = _parse_xml_set('test', all_files[2])
+        elif data_config.format_type is None:
+            training_data = data_config.training_data
+            logger.info(f'Using {len(training_data) if training_data else 0} Segmentation objects for training data')
+            evaluation_data = data_config.evaluation_data
+            logger.info(f'Using {len(evaluation_data) if evaluation_data else 0} Segmentation objects for evaluation data')
+            self.test_data = data_config.test_data
+            logger.info(f'Using {len(self.test_data) if data_config.test_data else 0} Segmentation objects for test data')
+        else:
+            raise ValueError(f'format_type {data_config.format_type} not in [alto, page, xml, None].')
+
+        if training_data and evaluation_data:
+            train_set = self._build_dataset(training_data,
+                                            augmentation=data_config.augment,
+                                            image_size=data_config.image_size,
+                                            class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                                           'regions': self.hparams.data_config.region_class_mapping})
+            self.train_set = Subset(train_set, range(len(train_set)))
+            val_set = self._build_dataset(evaluation_data,
+                                          image_size=data_config.image_size,
+                                          class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                                         'regions': self.hparams.data_config.region_class_mapping})
+
+            self.val_set = Subset(val_set, range(len(val_set)))
+        elif training_data:
+            train_set = self._build_dataset(training_data,
+                                            augmentation=data_config.augment,
+                                            image_size=data_config.image_size,
+                                            class_mapping={'baselines': self.hparams.data_config.baseline_class_mapping,
+                                                           'regions': self.hparams.data_config.region_class_mapping})
+
+            train_len = int(len(train_set)*data_config.partition)
+            val_len = len(train_set) - train_len
+            logger.info(f'No explicit validation data provided. Splitting off '
+                        f'{val_len} (of {len(train_set)}) samples to validation '
+                        'set.')
+            self.train_set, self.val_set = random_split(train_set, (train_len, val_len))
+        elif self.test_data:
+            pass
+        else:
+            raise ValueError('Invalid specification of training/evaluation/test data.')
+
+    def _build_dataset(self,
+                       data,
+                       **kwargs):
+        dataset = XMLDetectionDataset(**kwargs)
+
+        for page in data:
+            dataset.add(page)
+
+        return dataset
+
+    def setup(self, stage: str = None):
+        if stage == 'fit' or stage is None:
+            if len(self.train_set) == 0:
+                raise ValueError('No valid training data provided. Please add some.')
+            if len(self.val_set) == 0:
+                raise ValueError('No valid validation data provided. Please add some.')
+            self.hparams.data_config.line_class_mapping = dict(self.train_set.dataset.class_mapping['baselines'])
+            self.hparams.data_config.region_class_mapping = dict(self.train_set.dataset.class_mapping['regions'])
+        elif stage == 'test':
+            if len(self.test_data) == 0:
+                raise ValueError('No valid test data provided. Please add some.')
+            test_set = self._build_dataset(self.test_data,
+                                           image_size=self.hparams.data_config.image_size,
+                                           class_mapping=self.trainer.lightning_module.net.user_metadata['class_mapping'])
+            self.test_set = Subset(test_set, range(len(test_set)))
+            if len(self.test_set) == 0:
+                raise ValueError('No valid test data provided. Please add some.')
+
+    def train_dataloader(self):
+        return DataLoader(self.train_set,
+                          batch_size=1,
+                          num_workers=self.hparams.data_config.num_workers,
+                          shuffle=True,
+                          pin_memory=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_set,
+                          shuffle=False,
+                          batch_size=1,
+                          num_workers=self.hparams.data_config.num_workers,
+                          pin_memory=True)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_set,
+                          shuffle=False,
+                          batch_size=1,
+                          num_workers=self.hparams.data_config.num_workers,
+                          pin_memory=True)
+
+
+class DFINESegmentationModel(L.LightningModule):
     """
     A LightningModule encapsulating the training setup for a region object
     detection model.
     """
     def __init__(self,
-                 num_classes: int,
-                 model: Literal['nano', 'small', 'medium', 'large', 'extra_large'] = 'medium',
-                 quit: Literal['fixed', 'early'] = 'fixed',
-                 lag: int = 10,
-                 optimizer: str = 'AdamW',
-                 lr: float = 1e-4,
-                 momentum: float = 0.9,
-                 weight_decay: float = 1e-3,
-                 schedule: Literal['cosine', 'exponential', 'step', 'reduceonplateau', 'constant'] = 'constant',
-                 step_size: int = 10,
-                 gamma: float = 0.1,
-                 rop_factor: float = 0.1,
-                 rop_patience: int = 5,
-                 cos_t_max: float = 30,
-                 cos_min_lr: float = 1e-4,
-                 warmup: int = 100,
-                 image_size: tuple[int, int] = (320, 320),
-                 num_top_queries: int = 300,
-                 **kwargs):
+                 config: DFINESegmentationTrainingConfig,
+                 model: Optional['BaseModel'] = None):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['model'])
 
-        model_cfg = models[model]
-        self.model = build_model(model_cfg=model_cfg,
-                                 num_classes=num_classes,
-                                 img_size=image_size)
-        self.criterion = build_criterion(criterion_cfg=model_cfg,
-                                         num_classes=num_classes)
+        if model:
+            self.net = model
+
+            if self.net.model_type not in [None, 'segmentation']:
+                raise ValueError(f'Model {model} is of type {self.net.model_type} while `segmentation` is expected.')
+        else:
+            self.net = None
 
         self.map = MeanAveragePrecision(box_format='xyxy',
                                         iou_type='bbox',
                                         extended_summary=True)
 
-        self.model.train()
-        self.criterion.train()
-
     def forward(self, x):
-        return self.model(x)
+        return self.net(x)
 
     def training_step(self, batch, batch_idx):
-        loss = model_step(self.model, self.criterion, batch)
+        loss = model_step(self.net, self.criterion, batch)
         self.log('loss',
                  sum(loss.values()),
                  batch_size=batch['images'].shape[0],
@@ -98,7 +209,7 @@ class RegionDetectionModel(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         img_size = torch.Tensor(tuple(batch['images'].shape[2:] * 2), device=batch['images'].device)
 
-        outputs = self.model(batch['images'])
+        outputs = self.net(batch['images'])
         pred_logits, pred_boxes = outputs["pred_logits"], outputs["pred_boxes"]
         pred_boxes = box_convert(pred_boxes, in_fmt='cxcywh', out_fmt='xyxy') * img_size
 
@@ -131,8 +242,67 @@ class RegionDetectionModel(L.LightningModule):
                       logger=True)
         self.map.reset()
 
-    def save_checkpoint(self, filename):
-        self.trainer.save_checkpoint(filename)
+    def setup(self, stage: Optional[str] = None):
+        if stage in [None, 'fit']:
+            if self.net is None:
+                set_class_mapping = self.trainer.datamodule.train_set.dataset.class_mapping
+
+                self.net = create_model('DFINEModel',
+                                        model_size=self.hparams.config.model_size,
+                                        img_size=self.trainer.datamodule.hparams.data_config.image_size,
+                                        class_mapping=set_class_mapping)
+
+                self.criterion = build_criterion(model_size=self.hparams.config.model_size,
+                                                 class_mapping=set_class_mapping)
+
+    def on_load_checkpoint(self, checkpoint):
+        """
+        Reconstruct the model from the spec here and not in setup() as
+        otherwise the weight loading will fail.
+        """
+        if not isinstance(checkpoint['_module_config'], DFINESegmentationTrainingConfig):
+            raise ValueError('Checkpoint is not a D-FINE model.')
+
+        data_config = checkpoint['datamodule_hyper_parameters']['data_config']
+        self.net = create_model('DFINEModel',
+                                model_size=checkpoint['_module_config'].model_size,
+                                img_size=self.trainer.datamodule.hparams.data_config.image_size,
+                                class_mapping={'baselines': data_config.line_class_mapping,
+                                               'regions': data_config.region_class_mapping})
+
+        self.criterion = build_criterion(model_size=self.hparams.config.model_size,
+                                         class_mapping={'baselines': data_config.line_class_mapping,
+                                                        'regions': data_config.region_class_mapping})
+
+    def on_save_checkpoint(self, checkpoint):
+        """
+        Save hyperparameters a second time so we can set parameters that
+        shouldn't be overwritten in on_load_checkpoint.
+        """
+        checkpoint['_module_config'] = self.hparams.config
+
+    @classmethod
+    def load_from_weights(cls,
+                          path: Union[str, 'PathLike'],
+                          config: DFINESegmentationTrainingConfig) -> 'DFINESegmentationModel':
+        """
+        Initializes the module from a model weights file.
+        """
+        from kraken.models import load_models
+        models = load_models(path, tasks=['segmentation'])
+        if len(models) != 1:
+            raise ValueError(f'Found {len(models)} segmentation models in model file.')
+        return cls(config=config, model=models[0])
+
+    def configure_callbacks(self):
+        callbacks = []
+        if self.hparams.config.quit == 'early':
+            callbacks.append(EarlyStopping(monitor='mAP_50',
+                                           mode='max',
+                                           patience=self.hparams.config.lag,
+                                           stopping_threshold=1.0))
+
+        return callbacks
 
     # configuration of optimizers and learning rate schedulers
     # --------------------------------------------------------
@@ -141,28 +311,24 @@ class RegionDetectionModel(L.LightningModule):
     # batch-wise learning rate warmup. In lr_scheduler_step() calls to the
     # scheduler are then only performed at the end of the epoch.
     def configure_optimizers(self):
-        return _configure_optimizer_and_lr_scheduler(self.hparams,
-                                                     self.model,
-                                                     loss_tracking_mode='min')
+        return configure_optimizer_and_lr_scheduler(self.hparams.config,
+                                                    self.net.parameters(),
+                                                    len_train_set=len(self.trainer.datamodule.train_set),
+                                                    loss_tracking_mode='max')
 
     def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
         # update params
         optimizer.step(closure=optimizer_closure)
 
-        # linear warmup between 0 and the initial learning rate `lr` in `warmup`
+        # linear warmup between 0 and the initial learning rate `lrate` in `warmup`
         # steps.
-        if self.hparams.warmup and self.trainer.global_step < self.hparams.warmup:
-            lr_scale = min(1.0, float(self.trainer.global_step + 1) / self.hparams.warmup)
+        if self.hparams.config.warmup and self.trainer.global_step < self.hparams.config.warmup:
+            lr_scale = min(1.0, float(self.trainer.global_step + 1) / self.hparams)
             for pg in optimizer.param_groups:
-                if 'lr_scale' in pg:
-                    lr_scale = pg['lr_scale'] * lr_scale
-                if self.hparams.optimizer not in ['Adam8bit', 'Adam4bit', 'AdamW8bit', 'AdamW4bit', 'AdamWFp8']:
-                    pg['lr'] = lr_scale * self.hparams.lr
-                else:
-                    pg['lr'].fill_(lr_scale * self.hparams.lr)
+                pg["lr"] = lr_scale * self.hparams.config.lrate
 
     def lr_scheduler_step(self, scheduler, metric):
-        if not self.hparams.warmup or self.trainer.global_step >= self.hparams.warmup:
+        if not self.hparams.config.warmup or self.trainer.global_step >= self.hparams.config.warmup:
             # step OneCycleLR each batch if not in warmup phase
             if isinstance(scheduler, lr_scheduler.OneCycleLR):
                 scheduler.step()
@@ -172,68 +338,3 @@ class RegionDetectionModel(L.LightningModule):
                     scheduler.step()
                 else:
                     scheduler.step(metric)
-
-
-def _configure_optimizer_and_lr_scheduler(hparams, model, loss_tracking_mode='min'):
-    optimizer = hparams.get("optimizer")
-    lr = hparams.get("lr")
-    momentum = hparams.get("momentum")
-    weight_decay = hparams.get("weight_decay")
-    schedule = hparams.get("schedule")
-    gamma = hparams.get("gamma")
-    cos_t_max = hparams.get("cos_t_max")
-    cos_min_lr = hparams.get("cos_min_lr")
-    step_size = hparams.get("step_size")
-    rop_factor = hparams.get("rop_factor")
-    rop_patience = hparams.get("rop_patience")
-    completed_epochs = hparams.get("completed_epochs")
-
-    param_groups = filter(lambda p: p.requires_grad, model.parameters())
-
-    # XXX: Warmup is not configured here because it needs to be manually done in optimizer_step()
-    logger.debug(f'Constructing {optimizer} optimizer (lr: {lr}, momentum: {momentum})')
-    if optimizer in ['Adam', 'AdamW']:
-        optim = getattr(torch.optim, optimizer)(param_groups, lr=lr, weight_decay=weight_decay)
-    elif optimizer in ['Adam8bit', 'Adam4bit', 'AdamW8bit', 'AdamW4bit', 'AdamWFp8']:
-        import torchao.prototype.low_bit_optim
-        optim = getattr(torchao.prototype.low_bit_optim, optimizer)(param_groups, lr=lr, weight_decay=weight_decay)
-    elif optimizer == 'Mars':
-        from timm.optim import Mars
-        optim = Mars(param_groups, lr=lr, weight_decay=weight_decay, caution=True)
-    else:
-        optim = getattr(torch.optim, optimizer)(param_groups,
-                                                lr=lr,
-                                                momentum=momentum,
-                                                weight_decay=weight_decay)
-    lr_sched = {}
-    if schedule == 'exponential':
-        lr_sched = {'scheduler': lr_scheduler.ExponentialLR(optim, gamma, last_epoch=completed_epochs-1),
-                    'interval': 'step'}
-    elif schedule == 'cosine':
-        lr_sched = {'scheduler': lr_scheduler.CosineAnnealingLR(optim,
-                                                                cos_t_max,
-                                                                cos_min_lr,
-                                                                last_epoch=completed_epochs-1),
-                    'interval': 'step'}
-    elif schedule == 'step':
-        lr_sched = {'scheduler': lr_scheduler.StepLR(optim, step_size, gamma, last_epoch=completed_epochs-1),
-                    'interval': 'step'}
-    elif schedule == 'reduceonplateau':
-        lr_sched = {'scheduler': lr_scheduler.ReduceLROnPlateau(optim,
-                                                                mode=loss_tracking_mode,
-                                                                factor=rop_factor,
-                                                                patience=rop_patience),
-                    'interval': 'step'}
-    elif schedule != 'constant':
-        raise ValueError(f'Unsupported learning rate scheduler {schedule}.')
-
-    ret = {'optimizer': optim}
-    if lr_sched:
-        ret['lr_scheduler'] = lr_sched
-
-    if schedule == 'reduceonplateau':
-        lr_sched['monitor'] = 'val_accuracy'
-        lr_sched['strict'] = False
-        lr_sched['reduce_on_plateau'] = True
-
-    return ret

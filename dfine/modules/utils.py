@@ -1,12 +1,15 @@
 import math
+import logging
 from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from loguru import logger
 from torch import Tensor
 from torchvision.ops.boxes import box_area
+
+
+logger = logging.getLogger(__name__)
 
 
 def box_iou(boxes1: Tensor, boxes2: Tensor):
