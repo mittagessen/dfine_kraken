@@ -1,140 +1,50 @@
-# SoTA Object Detection D-FINE model training, exporting, inferencing pipeline from scratch
-This is a custom project to work with [D-FINE](https://arxiv.org/abs/2410.13842) - state of the art object detection transformer based model. Model author's repo: [D-FINE](https://github.com/Peterande/D-FINE).
-This is not a fork, but a complete rewrite from scratch. Only model atchitecture and loss functions were used from original repo.
+# D-FINE for document layout analysis
 
-Check out [the tutorial video](https://youtu.be/_uEyRRw4miY) to get familiar with this pipeline.
+This is an adaptation//refactor of [ArgoHA's implementation](https://github.com/ArgoHA/custom_d_fine) of the
+[D-FINE](https://arxiv.org/abs/2410.13842) object detector intended to put it
+in line with community standards in the (historical) document layout analysis
+community. It is a foundation for eventual integration into the [kraken ATR engine](https://kraken.re).
 
-## Main scripts
-To run the scripts, use the following commands:
+## Installation
+
+Kraken is currently being rewritten to allow integration of new methods, such
+as this repository, with plug-ins. This repository uses the architecture
+introduced by this rework which will eventually become kraken 7.0. The models
+produced by this repository are *not* going to be compatible with earlier
+kraken versions.
+
+Clone the repository and run:
+
 ```bash
-python -m src.etl.preprocess    # Converts images and PDFs to JPG format
-python -m src.etl.split         # Creates train, validation, and test CSVs with image paths
-python -m src.dl.train          # Runs the training pipeline
-python -m src.dl.export         # Exports weights in various formats after training
-python -m src.dl.bench          # Runs all exported models on the test set
-python -m src.dl.infer          # Runs model ontest folder, saves visualisations and txt preds
+$ pip install .
 ```
 
-Note: if you don't pass any parameters, you can run any of these scripts with `make script_name`, for exmaple: `make train` will run `python -m src.dl.train`. You can also just run `make` to run all scripts one by one (excluding last, infer script)
+This will install a CLI hook on ketos that can be used to train models (or use the alternative `dfine` command):
 
-## Usage example
-0. `git clone https://github.com/ArgoHA/custom_d_fine.git`
-1. For bigger models (l, x) download from [gdrive](https://drive.google.com/drive/folders/1cjfMS_YV5LcoJsYi-fy0HWBZQU6eeP-7?usp=share_link) andput into `pretrained` folder
-2. Prepare your data: `images` folder and `labels` folder (txt file per image in YOLO format).
-```
-📂 data/dataset
-├── 📁 images
-├── 📁 labels
-```
-3. Customize `config.yaml`, minimal example:
-      - `exp_name`. This is experiment name which is used in model's output folder. After you train a model, you can run export/bench/infer and it will use the model under this name + current date.
-      - `root`. Path to the directory where you store your dataset and where model outputs will be saved
-      - `data_path`. Path to the folder with `images` and `labels`
-      - `label_to_name`. Your custom dataset classes
-      - `model_name`. Choose from n/s/m/l/x model sizes.
-      - and usual things like: epochs, batch_size, num_workers. Check out config.yaml for all configs.
-4. Run `preprocess` and `split` scripts from custom_d_fine repo.
-5. Run `train` script, changing confurations, iterating, untill you get desired results.
-6. Run `export`script to create ONNX, TensorRT, OpenVINO models.
-
-[Training example with Colab](https://colab.research.google.com/drive/1ZV12qnUQMpC0g3j-0G-tYhmmdM98a41X?usp=sharing)
-
-If you run train script passing the args in the command and not changing them in the config file - you should also pass changed args to other scripts like `export` or `infer`. Example:
 ```bash
-python -m src.dl.train exp_name=my_experiment
-python -m src.dl.export exp_name=my_experiment
+$ dfine ... train ...
+$ ketos ... dfine_train ... 
 ```
 
-## Exporting tips
-Half precision:
-- usually makes sense if your hardware was more FLOPs in fp16
-- works best with TensorRT
-- for Torch version, AMP is used when Half flag is true, but if FLOPs are the same for fp32 and fp16 - I see AMP being a little slower during inference.
-- is not used for OpenVINO, as it automatically picks precision
+## Training
 
-Dynamic input means that during inference, we cut black paddings from letterbox. I don't recommend using it with D-FINE as accuracy degrades too much (probably because absolute Positional Encoding of pathces)
+The basic syntax is very similar to kraken segmentation training using Page or
+ALTO XML files. During the rework many of the segmentation dataset filtering
+and transformation options have disappeared, being replaced by dictionaries
+mapping class labels to indices. As it is annoying to define mapping on the
+command line, mappingsthat do not assign one index to each class in the source
+data need to be defined in YAML experiment configuration files.
+
+To train a basic model for 50 epochs from scratch:
+
+```bash
+$ dfine -d cuda:0 train *.xml
+```
+
+The default configuration only trains regions and filters out all text line
+bounding boxes. Have a look at the sample configuration file to see how to
+enable text line detection in bbox format.
 
 ## Inference
-Use inference classes in `src/infer`. Currently available:
-- Torch
-- TensorRT
-- OpenVINO
-- ONNX
 
-You can run inference on a folder (path_to_test_data) of images or on a folder of videos. Crops will be created automatically. You can control it and paddings from config.yaml in the `infer` section.
-
-## Outputs
-- **Models**: Saved during the training process and export at `output/models/exp_name_date`. Includes training logs, table with main metrics, confusion matrics, f1-score_vs_threshold and precisino_recall_vs_threshold. In extended_metrics you can file per class metrics (saved during final eval after all epochs)
-- **Debug images**: Preprocessed images (including augmentations) are saved at `output/debug_images/split` as they are fed into the model (except for normalization).
-- **Evaluation predicts**: Visualised model's predictions on val set. Includes GT as green and preds as blue.
-- **Bench images**: Visualised model's predictions with inference class. Uses all exported models
-- **Infer**: Visualised model's predictions and predicted annotations in yolo txt format
-
-## Results examples
-**Train**
-
-![image](assets/train.png)
-
-**Benchmarking**
-
-![image](assets/bench.png)
-
-**WandB**
-
-![image](assets/wandb.png)
-
-**Infer**
-
-![image](assets/infer_high.jpg)
-
-![image](assets/infer_water.jpg)
-
-
-## Features
-- Training pipeline from SoTA D-FINE model
-- Export to ONNX, OpenVino, TensorRT.
-- Inference class for Torch, TensorRT, OpenVINO on images or videos
-- Label smoothing in Focal loss
-- Augs based on the [albumentations](https://albumentations.ai) lib
-- Mosaic augmentation, multiscale aug
-- Metrics: mAPs, Precision, Recall, F1-score, Confusion matrix, IoU, plots
-- After training is done - runs a test to calculate the optimal conf threshold
-- Exponential moving average model
-- Batch accumulation
-- Automatic mixed precision (40% less vRAM used and 15% faster training)
-- Gradient clipping
-- Keep ratio of the image and use paddings or use simple resize
-- When ratio is kept, inference can be sped up with removal of grey paddings
-- Visualisation of preprocessed images, model predictions and ground truth
-- Warmup epochs to ignore background images for easier start of convirsion
-- OneCycler used as scheduler, AdamW as optimizer
-- Unified configuration file for all scrips
-- Annotations in YOLO format, splits in csv format
-- ETA displayed during training, precise strating epoch 2
-- Logging file with training process
-- WandB integration
-- Batch inference
-- Early stopping
-- Gradio UI demo
-
-## TODO
-- Finetune with layers freeze
-- Add support for cashing in dataset
-- Add support for multi GPU training
-- Instance segmentation
-- Smart dataset preprocessing. Detect small objects. Detect near duplicates (remove from val/test)
-
-
-## Acknowledgement
-This project is built upon original [D-FINE repo](https://github.com/Peterande/D-FINE). Thank you to the D-FINE team for an awesome model!
-
-``` bibtex
-@misc{peng2024dfine,
-      title={D-FINE: Redefine Regression Task in DETRs as Fine-grained Distribution Refinement},
-      author={Yansong Peng and Hebei Li and Peixi Wu and Yueyi Zhang and Xiaoyan Sun and Feng Wu},
-      year={2024},
-      eprint={2410.13842},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-```
+Not yet implemented.
