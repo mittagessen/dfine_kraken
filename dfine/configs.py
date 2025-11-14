@@ -1,3 +1,36 @@
+from kraken.configs import TrainingConfig, SegmentationTrainingDataConfig
+
+
+class DFINESegmentationTrainingConfig(TrainingConfig):
+    """
+    Base configuration for training a D-FINE segmentation model.
+
+    Args:
+        model_size (Literal[], defaults to medium):
+            D-FINE model variant
+        num_top_queries (int, defaults to 300):
+    """
+    def __init__(self, **kwargs):
+        self.model = kwargs.pop('model_size', 'medium')
+        self.num_top_queries = kwargs.pop('num_top_queries', 300)
+
+        kwargs.setdefault('quit', 'fixed')
+        kwargs.setdefault('epochs', 50)
+        kwargs.setdefault('lrate', 1e-4)
+        kwargs.setdefault('weight_decay', 1e-5)
+        super().__init__(**kwargs)
+
+
+class DFINESegmentationTrainingDataConfig(SegmentationTrainingDataConfig):
+    """
+    Base data configuration for a D-FINE segmentation model.
+    """
+    def __init__(self, **kwargs):
+        self.image_size = kwargs.pop('image_size', (320, 320))
+        kwargs.setdefault('batch_size', 16)
+        super().__init__(**kwargs)
+
+
 base_cfg = {
     "HGNetv2": {
         "pretrained": False,
@@ -204,36 +237,6 @@ AUGMENTATION_CONFIG = {'rotation_degree': 10,
                        'mosaic_translate': 0.2,
                        'mosaic_shear': 2.0
                       }
-
-HYPER_PARAMS = {'image_size': (320, 320),
-                'freq': 1.0,
-                'quit': 'fixed',
-                'epochs': 50,
-                'min_epochs': 0,
-                'lag': 10,
-                'min_delta': None,
-                'optimizer': 'AdamW',
-                'lrate': 1e-4,
-                'momentum': 0.9,
-                'weight_decay': 1e-5,
-                'schedule': 'constant',
-                'completed_epochs': 0,
-                'augment': False,
-                # lr scheduler params
-                # step/exp decay
-                'step_size': 10,
-                'gamma': 0.1,
-                # reduce on plateau
-                'rop_factor': 0.1,
-                'sched_patience': 5,
-                # cosine
-                'cos_max': 50,
-                'cos_min_lr': 2e-5,
-                'warmup': 1000,
-                'batch_size': 16,
-                'gradient_clip_val': 1.0,
-                'accumulate_grad_batches': 8,
-                }
 
 def merge_configs(base, size_specific):
     result = {**base}
