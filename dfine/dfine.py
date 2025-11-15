@@ -16,11 +16,11 @@ if TYPE_CHECKING:
     from kraken.configs import SegmentationInferenceConfig
 
 
-class DFINE(nn.Module, BaseModel):
+class DFINEModel(nn.Module, BaseModel):
 
     user_metadata = {}
     model_type = 'segmentation'
-    _kraken_min_version = '7.0.0'
+    _kraken_min_version = '6.0.0'
 
     def __init__(self, **kwargs):
         """
