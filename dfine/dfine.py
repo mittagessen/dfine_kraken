@@ -2,22 +2,18 @@ import uuid
 import torch
 import torch.nn as nn
 
-from shapely import geom
 from lightning.fabric import Fabric
-from collections import defaultdict
-from torchvision.transforms import v2
 from typing import Any, TYPE_CHECKING
-from torchvision.ops import box_convert
 
 from kraken.models import BaseModel
-from kraken.configs import SegmentationInferenceConfig
-from kraken.containers import Segmentation, Region, BBoxLine
 
 from dfine.configs import models
 from dfine.modules import HGNetv2, DFINETransformer, HybridEncoder
 
 if TYPE_CHECKING:
     from PIL import Image
+    from kraken.containers import Segmentation
+    from kraken.configs import SegmentationInferenceConfig
 
 
 class DFINE(nn.Module, BaseModel):
@@ -74,10 +70,12 @@ class DFINE(nn.Module, BaseModel):
         x = self.decoder(x, targets)
         return x
 
-    def prepare_for_inference(self, config: SegmentationInferenceConfig):
+    def prepare_for_inference(self, config: 'SegmentationInferenceConfig'):
         """
         Configures the model for inference.
         """
+        from torchvision.transforms import v2
+
         self.eval()
         self._inf_config = config
 
@@ -96,13 +94,19 @@ class DFINE(nn.Module, BaseModel):
                                      v2.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0]))
 
     @torch.inference_mode()
-    def predict(self, im: 'Image.Image') -> Segmentation:
+    def predict(self, im: 'Image.Image') -> 'Segmentation':
         """
         Runs prediction with the model.
 
         Args:
             im: Input image.
         """
+        import shapely.geometry as geom
+
+        from collections import defaultdict
+        from torchvision.ops import box_convert
+        from kraken.containers import Segmentation, Region, BBoxLine
+
         orig_size = self._fabric.to_device(torch.tensor(tuple(im.size * 2)))
         scaled_im = self.transforms(im)
         outputs = self(scaled_im)
