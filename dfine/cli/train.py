@@ -226,7 +226,7 @@ def train(ctx, **kwargs):
                       min_epochs=params['min_epochs'],
                       enable_progress_bar=True if not ctx.meta['verbose'] else False,
                       deterministic=ctx.meta['deterministic'],
-                      enable_model_summary=False,
+                      enable_model_summary=True,
                       accumulate_grad_batches=params['accumulate_grad_batches'],
                       callbacks=cbs,
                       gradient_clip_val=params['gradient_clip_val'],
