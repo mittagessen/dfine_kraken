@@ -9,7 +9,7 @@ train:
     - val.lst
   output: checkpoints
   weights_format: safetensors
-  line_class_mapping:  # Set to null to generate a mapping automatically
+  line_class_mapping:  # Remove key completely to map each class to an individual index automatically.
     - ['*', 3]  # '*' is a special value that matches all strings. It can be
                 # used to match all classes into one value
     - ['DefaultLine', 3]  # if you use '*' you can make sure you also need to
@@ -25,5 +25,5 @@ train:
   schedule: constant
   warmup: 1000
   augment: true
-  image_size: (1280, 1280)
+  image_size: [1280, 1280]
   num_top_queries: 300
