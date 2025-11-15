@@ -309,27 +309,21 @@ class TransformerEncoder(nn.Module):
 
 
 class HybridEncoder(nn.Module):
-    __share__ = [
-        "eval_spatial_size",
-    ]
-
-    def __init__(
-        self,
-        in_channels=[512, 1024, 2048],
-        feat_strides=[8, 16, 32],
-        hidden_dim=256,
-        nhead=8,
-        dim_feedforward=1024,
-        dropout=0.0,
-        enc_act="gelu",
-        use_encoder_idx=[2],
-        num_encoder_layers=1,
-        pe_temperature=10000,
-        expansion=1.0,
-        depth_mult=1.0,
-        act="silu",
-        eval_spatial_size=None,
-    ):
+    def __init__(self,
+                 in_channels=[512, 1024, 2048],
+                 feat_strides=[8, 16, 32],
+                 hidden_dim=256,
+                 nhead=8,
+                 dim_feedforward=1024,
+                 dropout=0.0,
+                 enc_act="gelu",
+                 use_encoder_idx=[2],
+                 num_encoder_layers=1,
+                 pe_temperature=10000,
+                 expansion=1.0,
+                 depth_mult=1.0,
+                 act="silu",
+                 eval_spatial_size=None):
         super().__init__()
         self.in_channels = in_channels
         self.feat_strides = feat_strides

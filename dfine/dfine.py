@@ -45,7 +45,7 @@ class DFINE(nn.Module, BaseModel):
         model_cfg["HybridEncoder"]["eval_spatial_size"] = image_size 
         model_cfg["DFINETransformer"]["eval_spatial_size"] = image_size 
         # rather highest class index 
-        num_classes = max(max(v.values()) if v else 0 for v in class_mapping.values())
+        num_classes = max(max(v.values()) if v else 0 for v in class_mapping.values()) + 1
 
         self.backbone = HGNetv2(**model_cfg["HGNetv2"])
         self.encoder = HybridEncoder(**model_cfg["HybridEncoder"])

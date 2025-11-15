@@ -87,7 +87,7 @@ class XMLDetectionDataset(Dataset):
                  image_size: tuple[int, int] = (1280, 1280)):
         super().__init__()
         self.class_mapping = class_mapping
-        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values())
+        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values()) + 1
 
         self.failed_samples = set()
         self.class_stats = {'lines': defaultdict(int), 'regions': defaultdict(int)}
@@ -173,7 +173,7 @@ class XMLDetectionDataset(Dataset):
                 continue
         self.targets.append(objs)
         self.imgs.append(doc.imagename)
-        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values())
+        self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values()) + 1
 
     def _get_sample(self, idx):
         image = cv2.imread(self.imgs[idx])
