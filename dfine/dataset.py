@@ -101,7 +101,9 @@ class XMLDetectionDataset(Dataset):
         if augmentation:
             self.mosaic_prob = augmentation_config['mosaic_prob']
             self.mosaic_transform = A.Compose([A.Mosaic(grid_yx=(3, 3),
-                                                        target_size=image_size),
+                                                        target_size=image_size,
+                                                        metadata_key="mosaic_metadata"),
+                                               A.Resize(self.image_size[0], self.image_size[1], interpolation=cv2.INTER_AREA),
                                                A.Normalize(mean=self.norm[0], std=self.norm[1]),
                                                ToTensorV2()],
                                               bbox_params=A.BboxParams(format="yolo", label_fields=["labels"], clip=True, filter_invalid_bboxes=True))
@@ -194,7 +196,7 @@ class XMLDetectionDataset(Dataset):
         if self.augmentation and random.random() < self.mosaic_prob:
             res = self._get_sample(idx)
             # get additional samples for composing the mosaic
-            add_samples = [self._get_sample(random.randint(0, len(self) - 1)) for _ in range(3)]
+            add_samples = [self._get_sample(random.randint(0, len(self) - 1)) for _ in range(8)]
             res = self.mosaic_transform(**self._get_sample(idx), mosaic_metadata=add_samples)
         else:
             res = self._get_sample(idx)
