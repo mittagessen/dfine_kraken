@@ -56,9 +56,9 @@ class DFINEModel(nn.Module, BaseModel):
         self.region_map = {}
         for cls, idx in self.user_metadata['class_mapping']['lines'].items():
             # there might be multiple classes mapping to the same index -> pick the first one.
-            self.line_map.setdefault(cls, idx)
+            self.line_map.setdefault(idx, cls)
         for cls, idx in self.user_metadata['class_mapping']['regions'].items():
-            self.region_map.setdefault(cls, idx)
+            self.region_map.setdefault(idx, cls)
 
         self.backbone = HGNetv2(**model_cfg["HGNetv2"])
         self.encoder = HybridEncoder(**model_cfg["HybridEncoder"])
@@ -83,15 +83,17 @@ class DFINEModel(nn.Module, BaseModel):
                               devices=self._inf_config.device,
                               precision=self._inf_config.precision)
 
-        self.nn = self._fabric._precision.convert_module(self.nn)
-        self.nn = self._fabric.to_device(self.nn)
+        for x in [self.backbone, self.encoder, self.decoder]:
+            x =  self._fabric._precision.convert_module(x)
+            x = self._fabric.to_device(x)
 
         _m_dtype = next(self.parameters()).dtype
 
-        self.transforms = v2.Compose(v2.Resize(self.user_metadata['image_size']),
-                                     v2.RGB(),
-                                     v2.ToDtype(_m_dtype, scale=True),
-                                     v2.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0]))
+        self.transforms = v2.Compose([v2.Resize(self.user_metadata['image_size']),
+                                      v2.RGB(),
+                                      v2.ToImage(),
+                                      v2.ToDtype(_m_dtype, scale=True),
+                                      v2.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0])])
 
     @torch.inference_mode()
     def predict(self, im: 'Image.Image') -> 'Segmentation':
@@ -108,10 +110,10 @@ class DFINEModel(nn.Module, BaseModel):
         from kraken.containers import Segmentation, Region, BBoxLine
 
         orig_size = self._fabric.to_device(torch.tensor(tuple(im.size * 2)))
-        scaled_im = self.transforms(im)
+        scaled_im = self.transforms(im).unsqueeze(0)
         outputs = self(scaled_im)
         logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
-        boxes = box_convert(boxes, in_fmt='cxcywh', out_fmt='xyxyxyxy') * orig_size
+        boxes = box_convert(boxes, in_fmt='cxcywh', out_fmt='xyxy') * orig_size
 
         # scores from distribution
         scores = logits.sigmoid()
@@ -119,20 +121,25 @@ class DFINEModel(nn.Module, BaseModel):
         labels = index - index // self.num_classes * self.num_classes
         index = index // self.num_classes
         boxes = boxes.gather(dim=1, index=index.unsqueeze(-1).repeat(1, 1, boxes.shape[-1]))
+
         # threshold by class score
+        scores = scores.squeeze()
+        boxes = boxes.squeeze()
+        labels = labels.squeeze()
         mask = scores[labels] >= 0.5
-        scores, boxes, labels = scores[mask].cpu(), boxes[mask].cpu(), labels[mask].cpu()
+        boxes, labels = boxes[mask].cpu(), labels[mask].cpu().tolist()
 
         regions = defaultdict(list)
         _shp_regs = {}
-        for score, box, label in zip(scores, boxes, labels):
+        for box, label in zip(boxes, labels):
             if label in self.region_map:
-                region = Region(id=f'_{uuid.uuid4()}', boundary=box.tolist(), tags={'type': [{'type': self.region_map[label]}]})
+                bbox = box.index_select(0, torch.tensor([0, 1, 0, 3, 2, 3, 2, 1])).round().to(int).view(4, 2)
+                region = Region(id=f'_{uuid.uuid4()}', boundary=bbox.tolist(), tags={'type': [{'type': self.region_map[label]}]})
                 regions[self.region_map[label]].append(region)
                 _shp_regs[region.id] = geom.Polygon(region.boundary)
 
         lines = []
-        for score, box, label in zip(scores, boxes, labels):
+        for box, label in zip(boxes, labels):
             if label in self.line_map:
                 line_ls = geom.Polygon(box.tolist()).centroid
                 regs = []
