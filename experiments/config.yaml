@@ -1,0 +1,29 @@
+precision: bf16-mixed
+device: cuda:0
+workers: 16
+threads: 1
+train:
+  training_data: 
+    - train.lst
+  evaluation_data: 
+    - val.lst
+  output: checkpoints
+  weights_format: safetensors
+  line_class_mapping:  # Set to null to generate a mapping automatically
+    - ['*', 3]  # '*' is a special value that matches all strings. It can be
+                # used to match all classes into one value
+    - ['DefaultLine', 3]  # if you use '*' you can make sure you also need to
+                          # define a merged class identifier. Otherwise a random one will be picked.
+    - ['Marginal_Note', 4]
+  # line_class_mapping: {}  # Set to empty dictionary to train only on regions.
+  region_class_mapping: 
+    - ['*', 5]  # same semantics as line_class_mapping.
+    - ['Text_Region', 5]
+    - ['Foot_Notes', 6]
+  epochs: 24
+  lrate: 1e-4
+  schedule: constant
+  warmup: 1000
+  augment: true
+  image_size: (1280, 1280)
+  num_top_queries: 300
