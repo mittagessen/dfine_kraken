@@ -250,6 +250,7 @@ class DFINESegmentationModel(L.LightningModule):
                 self.net = create_model('DFINEModel',
                                         model_variant=self.hparams.config.model_variant,
                                         image_size=self.trainer.datamodule.hparams.data_config.image_size,
+                                        num_top_queries=self.hparams.config.num_top_queries,
                                         class_mapping=set_class_mapping)
 
                 self.num_classes = max(max(v.values()) if v else 0 for v in set_class_mapping.values()) + 1
@@ -269,6 +270,7 @@ class DFINESegmentationModel(L.LightningModule):
         self.net = create_model('DFINEModel',
                                 model_variant=checkpoint['_module_config'].model_variant,
                                 image_size=data_config.image_size,
+                                num_top_queries=checkpoint['_module_config'].num_top_queries,
                                 class_mapping={'lines': data_config.line_class_mapping,
                                                'regions': data_config.region_class_mapping})
 
