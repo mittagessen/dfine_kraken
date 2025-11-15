@@ -195,7 +195,7 @@ def train(ctx, **kwargs):
     cbs = []
     checkpoint_callback = ModelCheckpoint(dirpath=params.pop('checkpoint_path'),
                                           save_top_k=10,
-                                          monitor='mAP_50',
+                                          monitor='val_metric',
                                           mode='max',
                                           auto_insert_metric_name=False,
                                           filename='checkpoint_{epoch:02d}-{val_metric:.4f}')

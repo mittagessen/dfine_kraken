@@ -240,6 +240,7 @@ class DFINESegmentationModel(L.LightningModule):
                       on_epoch=True,
                       prog_bar=True,
                       logger=True)
+        self.log('val_metric', metrics['map_50'], prog_bar=False)
         self.map.reset()
 
     def setup(self, stage: Optional[str] = None):
