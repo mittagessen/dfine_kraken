@@ -33,11 +33,7 @@ class DFINESegmentationTrainingDataConfig(SegmentationTrainingDataConfig):
 
 
 base_cfg = {
-    "HGNetv2": {
-        "pretrained": False,
-        "local_model_dir": "weight/hgnetv2/",
-        "freeze_stem_only": True,
-    },
+    "convnextv2": {'pretrained': True},
     "HybridEncoder": {
         "num_encoder_layers": 1,
         "nhead": 8,
@@ -79,15 +75,12 @@ base_cfg = {
 
 sizes_cfg = {
     "nano": {
-        "HGNetv2": {
-            "name": "B0",
-            "return_idx": [2, 3],
-            "freeze_at": -1,
-            "freeze_norm": False,
-            "use_lab": True,
+        "backbone": {
+            "model_name": "convnextv2_femto",
+            "out_indices": [2, 3],
         },
         "HybridEncoder": {
-            "in_channels": [512, 1024],
+            "in_channels": [192, 384],
             "feat_strides": [16, 32],
             "hidden_dim": 128,
             "use_encoder_idx": [1],
@@ -107,15 +100,12 @@ sizes_cfg = {
         },
     },
     "small": {
-        "HGNetv2": {
-            "name": "B0",
-            "return_idx": [1, 2, 3],
-            "freeze_at": -1,
-            "freeze_norm": False,
-            "use_lab": True,
+        "backbone": {
+            "model_name": "convnextv2_pico",
+            "out_indices": [1, 2, 3],
         },
         "HybridEncoder": {
-            "in_channels": [256, 512, 1024],
+            "in_channels": [128, 256, 512],
             "feat_strides": [8, 16, 32],
             "hidden_dim": 256,
             "use_encoder_idx": [2],
@@ -134,15 +124,12 @@ sizes_cfg = {
         },
     },
     "medium": {
-        "HGNetv2": {
-            "name": "B2",
-            "return_idx": [1, 2, 3],
-            "freeze_at": -1,
-            "freeze_norm": False,
-            "use_lab": True,
+        "backbone": {
+            "model_name": "convnextv2_nano",
+            "out_indices": [1, 2, 3],
         },
         "HybridEncoder": {
-            "in_channels": [384, 768, 1536],
+            "in_channels": [160, 320, 640],
             "feat_strides": [8, 16, 32],
             "hidden_dim": 256,
             "use_encoder_idx": [2],
@@ -162,15 +149,12 @@ sizes_cfg = {
         },
     },
     "large": {
-        "HGNetv2": {
-            "name": "B4",
-            "return_idx": [1, 2, 3],
-            "freeze_at": 0,
-            "freeze_norm": True,
-            "use_lab": False,
-        },
+        "backbone": {
+            "model_name": "convnextv2_tiny",
+            "out_indices": [1, 2, 3],
+         },
         "HybridEncoder": {
-            "in_channels": [512, 1024, 2048],
+            "in_channels": [192, 384, 768],
             "feat_strides": [8, 16, 32],
             "hidden_dim": 256,
             "use_encoder_idx": [2],
@@ -190,15 +174,12 @@ sizes_cfg = {
         },
     },
     "extra_large": {
-        "HGNetv2": {
-            "name": "B5",
-            "return_idx": [1, 2, 3],
-            "freeze_at": 0,
-            "freeze_norm": True,
-            "use_lab": False,
+        "backbone": {
+            "model_name": "convnextv2_base",
+            "out_indices": [1, 2, 3],
         },
         "HybridEncoder": {
-            "in_channels": [512, 1024, 2048],
+            "in_channels": [256, 512, 1024],
             "feat_strides": [8, 16, 32],
             "hidden_dim": 384,
             "use_encoder_idx": [2],

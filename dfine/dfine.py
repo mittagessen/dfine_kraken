@@ -1,4 +1,5 @@
 import uuid
+import timm
 import torch
 import torch.nn as nn
 
@@ -8,7 +9,7 @@ from typing import Any, TYPE_CHECKING
 from kraken.models import BaseModel
 
 from dfine.configs import models
-from dfine.modules import HGNetv2, DFINETransformer, HybridEncoder
+from dfine.modules import DFINETransformer, HybridEncoder
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -51,16 +52,8 @@ class DFINEModel(nn.Module, BaseModel):
         model_cfg["DFINETransformer"]["eval_spatial_size"] = image_size
 
         self.num_classes = max(max(v.values()) if v else 0 for v in class_mapping.values()) + 1
-        # invert class_mapping
-        self.line_map = {}
-        self.region_map = {}
-        for cls, idx in self.user_metadata['class_mapping']['lines'].items():
-            # there might be multiple classes mapping to the same index -> pick the first one.
-            self.line_map.setdefault(idx, cls)
-        for cls, idx in self.user_metadata['class_mapping']['regions'].items():
-            self.region_map.setdefault(idx, cls)
-
-        self.backbone = HGNetv2(**model_cfg["HGNetv2"])
+        self.backbone = timm.create_model(**model_cfg['backbone'],
+                                          features_only=True)
         self.encoder = HybridEncoder(**model_cfg["HybridEncoder"])
         self.decoder = DFINETransformer(num_classes=self.num_classes, **model_cfg["DFINETransformer"])
 
@@ -94,6 +87,15 @@ class DFINEModel(nn.Module, BaseModel):
                                       v2.ToImage(),
                                       v2.ToDtype(_m_dtype, scale=True),
                                       v2.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0])])
+
+        # invert class_mapping
+        self.line_map = {}
+        self.region_map = {}
+        for cls, idx in self.user_metadata['class_mapping']['lines'].items():
+            # there might be multiple classes mapping to the same index -> pick the first one.
+            self.line_map.setdefault(idx, cls)
+        for cls, idx in self.user_metadata['class_mapping']['regions'].items():
+            self.region_map.setdefault(idx, cls)
 
     @torch.inference_mode()
     def predict(self, im: 'Image.Image') -> 'Segmentation':
