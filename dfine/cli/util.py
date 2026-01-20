@@ -21,6 +21,7 @@ import os
 import glob
 import yaml
 import shlex
+import difflib
 import logging
 from collections import defaultdict
 from typing import List, Optional, Tuple, Dict, Any
