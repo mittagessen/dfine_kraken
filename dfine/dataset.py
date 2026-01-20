@@ -162,7 +162,7 @@ class XMLDetectionDataset(Dataset):
                 idx = self.class_mapping['lines'][tag]
                 objs[idx].append(polygon_to_cxcywh(line.boundary, wh))
                 self.class_stats['lines'][idx] += 1
-            except KeyError:
+            except KeyError, TypeError:
                 continue
 
         for k, v in doc.regions.items():
@@ -171,7 +171,7 @@ class XMLDetectionDataset(Dataset):
                 v = torch.Tensor([polygon_to_cxcywh(x.boundary, wh) for x in v if x.boundary])
                 objs[idx].extend(v)
                 self.class_stats['regions'][idx] += len(v)
-            except KeyError:
+            except KeyError, TypeError:
                 continue
         self.targets.append(objs)
         self.imgs.append(doc.imagename)
