@@ -123,7 +123,10 @@ class DFINESegmentationDataModule(L.LightningDataModule):
         dataset = XMLDetectionDataset(**kwargs)
 
         for page in data:
-            dataset.add(page)
+            try:
+                dataset.add(page)
+            except Exception as e:
+                logger.warning(str(e))
 
         return dataset
 
