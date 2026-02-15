@@ -5,7 +5,7 @@ import torch.nn as nn
 from lightning.fabric import Fabric
 from typing import Any, TYPE_CHECKING
 
-from kraken.models import BaseModel
+from kraken.models import SegmentationBaseModel
 
 from dfine.configs import models
 from dfine.modules import HGNetv2, DFINETransformer, HybridEncoder
@@ -16,11 +16,10 @@ if TYPE_CHECKING:
     from kraken.configs import SegmentationInferenceConfig
 
 
-class DFINEModel(nn.Module, BaseModel):
+class DFINEModel(nn.Module, SegmentationBaseModel):
 
-    user_metadata = {}
-    model_type = 'segmentation'
-    _kraken_min_version = '6.0.0'
+    model_type = ['segmentation']
+    _kraken_min_version = '7.0.0'
 
     def __init__(self, **kwargs):
         """
@@ -42,8 +41,7 @@ class DFINEModel(nn.Module, BaseModel):
         if kwargs.get('num_top_queries', None) is None:
             raise ValueError('num_top_queries argument is missing in args.')
 
-        self.user_metadata: dict[str, Any] = {'accuracy': [],
-                                              'metrics': []}
+        self.user_metadata.update({'accuracy': [], 'metrics': []})
         self.user_metadata.update(kwargs)
 
         model_cfg = models[model_variant]
