@@ -24,7 +24,7 @@ import shlex
 import difflib
 import logging
 from collections import defaultdict
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Optional, Any
 
 import click
 
@@ -47,21 +47,35 @@ def _create_class_map(cls_map):
 
 
 def _recursive_update(a: dict[str, Any],
-                      b: dict[str, Any]) -> dict[str, Any]:
+                      b: dict[str, Any],
+                      cmd: Optional[click.BaseCommand] = None) -> dict[str, Any]:
     """Like standard ``dict.update()``, but recursive so sub-dict gets updated.
 
-    Warns on keys present in ``b`` but not in ``a`` and suggests alternatives.
+    Warns on keys present in ``b`` but not in ``a`` and not valid option names
+    for the command ``cmd`` and suggests alternatives.
     """
+    valid_keys = set(a.keys())
+    if cmd is not None:
+        for param in cmd.params:
+            if param.name:
+                valid_keys.add(param.name)
+        if isinstance(cmd, click.MultiCommand):
+            valid_keys.update(cmd.list_commands(None))
     for k, v in b.items():
-        if k not in a:
-            matches = difflib.get_close_matches(k, a.keys())
+        if k not in valid_keys:
+            matches = difflib.get_close_matches(k, valid_keys)
             msg = f'Ignoring unknown configuration key "{k}" in experiment file.'
             if matches:
                 msg += f' Did you mean "{matches[0]}"?'
             logger.warning(msg)
             continue
+        subcmd = None
+        if cmd is not None and isinstance(cmd, click.MultiCommand):
+            subcmd = cmd.get_command(None, k)
         if isinstance(v, dict) and isinstance(a.get(k), dict):
-            a[k] = _recursive_update(a[k], v)
+            a[k] = _recursive_update(a[k], v, subcmd)
+        elif isinstance(v, dict) and subcmd is not None:
+            a[k] = _recursive_update({}, v, subcmd)
         else:
             a[k] = v
     return a
@@ -80,7 +94,7 @@ def _load_config(ctx: click.Context,
             # Update the default_map.
             if ctx.default_map is None:
                 ctx.default_map = {}
-            ctx.default_map = _recursive_update(ctx.default_map, conf)
+            ctx.default_map = _recursive_update(ctx.default_map, conf, ctx.command)
         except FileNotFoundError:
             logger.critical(f"No configuration file {path} found.")
 
@@ -89,11 +103,11 @@ def _validate_merging(ctx: click.Context,
                       param: click.Parameter,
                       value) -> dict:
     """
-    Maps baseline/region merging to a dict of merge structures.
+    Maps line/region merging to a dict of merge structures.
     """
     if not value:
         return None
-    merge_dict: Dict[str, str] = {}
+    merge_dict: dict[str, str] = {}
     try:
         for m in value:
             lexer = shlex.shlex(m, posix=True)
@@ -110,6 +124,8 @@ def _validate_merging(ctx: click.Context,
 
 def _validate_manifests(ctx, param, value):
     images = []
+    if value is None:
+        return None
     for manifest in value:
         try:
             for entry in manifest.readlines():
@@ -140,7 +156,7 @@ def message(msg, **styles):
         click.secho(msg, **styles)
 
 
-def to_ptl_device(device: str) -> Tuple[str, Optional[List[int]]]:
+def to_ptl_device(device: str) -> tuple[str, Optional[list[int]]]:
     if device.strip() == 'auto':
         return 'auto', 'auto'
     devices = device.split(',')

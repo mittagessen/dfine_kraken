@@ -13,6 +13,7 @@ class DFINESegmentationTrainingConfig(TrainingConfig):
     def __init__(self, **kwargs):
         self.model_variant = kwargs.pop('model_variant', 'medium')
         self.num_top_queries = kwargs.pop('num_top_queries', 300)
+        self.resize = kwargs.pop('resize', 'fail')
 
         kwargs.setdefault('quit', 'fixed')
         kwargs.setdefault('epochs', 50)

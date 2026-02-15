@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 __all__ = ['DFINESegmentationDataModule', 'DFINESegmentationModel']
 
 
+def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    return {'lines': dict(class_mapping.get('lines', {})),
+            'regions': dict(class_mapping.get('regions', {}))}
+
+
+def _num_classes_from_mapping(class_mapping: dict[str, dict[str, int]]) -> int:
+    return max((v for d in class_mapping.values() for v in d.values()), default=0) + 1
+
+
 def model_step(model, criterion, batch):
     o = model(batch['images'], targets=batch['target'])
     return criterion(outputs=o, targets=batch['target'])
@@ -143,7 +152,7 @@ class DFINESegmentationDataModule(L.LightningDataModule):
                 raise ValueError('No valid test data provided. Please add some.')
             test_set = self._build_dataset(self.test_data,
                                            image_size=self.hparams.data_config.image_size,
-                                           class_mapping=self.trainer.lightning_module.net.user_metadata['class_mapping'])
+                                           class_mapping=_normalize_class_mapping(self.trainer.lightning_module.net.user_metadata['class_mapping']))
             self.test_set = Subset(test_set, range(len(test_set)))
             if len(self.test_set) == 0:
                 raise ValueError('No valid test data provided. Please add some.')
@@ -185,8 +194,10 @@ class DFINESegmentationModel(L.LightningModule):
         if model:
             self.net = model
 
-            if self.net.model_type not in [None, 'segmentation']:
+            if self.net.model_type and 'segmentation' not in self.net.model_type:
                 raise ValueError(f'Model {model} is of type {self.net.model_type} while `segmentation` is expected.')
+            if 'class_mapping' in self.net.user_metadata:
+                self.net.user_metadata['class_mapping'] = _normalize_class_mapping(self.net.user_metadata['class_mapping'])
         else:
             self.net = None
 
@@ -248,39 +259,123 @@ class DFINESegmentationModel(L.LightningModule):
 
     def setup(self, stage: Optional[str] = None):
         if stage in [None, 'fit']:
+            set_class_mapping = _normalize_class_mapping(self.trainer.datamodule.train_set.dataset.class_mapping)
             if self.net is None:
-                set_class_mapping = self.trainer.datamodule.train_set.dataset.class_mapping
-
                 self.net = create_model('DFINEModel',
                                         model_variant=self.hparams.config.model_variant,
                                         image_size=self.trainer.datamodule.hparams.data_config.image_size,
                                         num_top_queries=self.hparams.config.num_top_queries,
                                         class_mapping=set_class_mapping)
+            else:
+                net_class_mapping = _normalize_class_mapping(self.net.user_metadata.get('class_mapping', set_class_mapping))
+                if set_class_mapping['lines'].keys() != net_class_mapping['lines'].keys() or \
+                   set_class_mapping['regions'].keys() != net_class_mapping['regions'].keys():
 
-                self.num_classes = max(max(v.values()) if v else 0 for v in set_class_mapping.values()) + 1
+                    line_diff = set(set_class_mapping['lines'].keys()).symmetric_difference(set(net_class_mapping['lines'].keys()))
+                    regions_diff = set(set_class_mapping['regions'].keys()).symmetric_difference(set(net_class_mapping['regions'].keys()))
 
-                self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
-                                                 class_mapping=set_class_mapping)
+                    resize_mode = self.hparams.config.resize
+
+                    if resize_mode == 'fail':
+                        raise ValueError(f'Training data and model class mapping differ (lines: {line_diff}, regions: {regions_diff})')
+                    elif resize_mode == 'union':
+                        new_lines = set_class_mapping['lines'].keys() - net_class_mapping['lines'].keys()
+                        new_regions = set_class_mapping['regions'].keys() - net_class_mapping['regions'].keys()
+                        cls_idx = max(max(net_class_mapping['lines'].values()) if net_class_mapping['lines'] else -1,
+                                      max(net_class_mapping['regions'].values()) if net_class_mapping['regions'] else -1)
+                        logger.info(f'Adding {len(new_lines) + len(new_regions)} missing types to network output layer.')
+                        self.net.resize_output(cls_idx + len(new_lines) + len(new_regions) + 1)
+                        for c in new_lines:
+                            cls_idx += 1
+                            net_class_mapping['lines'][c] = cls_idx
+                        for c in new_regions:
+                            cls_idx += 1
+                            net_class_mapping['regions'][c] = cls_idx
+                    elif resize_mode == 'new':
+                        logger.info('Fitting network exactly to training set.')
+                        new_lines = set_class_mapping['lines'].keys() - net_class_mapping['lines'].keys()
+                        new_regions = set_class_mapping['regions'].keys() - net_class_mapping['regions'].keys()
+                        del_lines = net_class_mapping['lines'].keys() - set_class_mapping['lines'].keys()
+                        del_regions = net_class_mapping['regions'].keys() - set_class_mapping['regions'].keys()
+
+                        logger.info(f'Adding {len(new_lines) + len(new_regions)} missing '
+                                    f'types and removing {len(del_lines) + len(del_regions)} from network output layer.')
+                        cls_idx = max(max(net_class_mapping['lines'].values()) if net_class_mapping['lines'] else -1,
+                                      max(net_class_mapping['regions'].values()) if net_class_mapping['regions'] else -1)
+
+                        del_indices = [net_class_mapping['lines'][x] for x in del_lines]
+                        del_indices.extend(net_class_mapping['regions'][x] for x in del_regions)
+                        self.net.resize_output(cls_idx + len(new_lines) + len(new_regions) - len(del_lines) - len(del_regions) + 1,
+                                               del_indices)
+
+                        cls_idx = min(min(net_class_mapping['lines'].values()) if net_class_mapping['lines'] else torch.inf,
+                                      min(net_class_mapping['regions'].values()) if net_class_mapping['regions'] else torch.inf)
+
+                        lines = {}
+                        for k, _ in sorted(net_class_mapping['lines'].items(), key=lambda item: item[1]):
+                            if k not in del_lines:
+                                lines[k] = cls_idx
+                                cls_idx += 1
+
+                        regions = {}
+                        for k, _ in sorted(net_class_mapping['regions'].items(), key=lambda item: item[1]):
+                            if k not in del_regions:
+                                regions[k] = cls_idx
+                                cls_idx += 1
+
+                        net_class_mapping['lines'] = lines
+                        net_class_mapping['regions'] = regions
+
+                        cls_idx -= 1
+                        for c in new_lines:
+                            cls_idx += 1
+                            net_class_mapping['lines'][c] = cls_idx
+                        for c in new_regions:
+                            cls_idx += 1
+                            net_class_mapping['regions'][c] = cls_idx
+                    else:
+                        raise ValueError(f'invalid resize parameter value {resize_mode}')
+
+                num_classes = _num_classes_from_mapping(net_class_mapping)
+                self.trainer.datamodule.train_set.dataset.class_mapping = net_class_mapping
+                self.trainer.datamodule.train_set.dataset.num_classes = num_classes
+                self.trainer.datamodule.val_set.dataset.class_mapping = net_class_mapping
+                self.trainer.datamodule.val_set.dataset.num_classes = num_classes
+
+            self.net.user_metadata['class_mapping'] = self.trainer.datamodule.train_set.dataset.canonical_class_mapping
+            self.num_classes = _num_classes_from_mapping(self.trainer.datamodule.train_set.dataset.class_mapping)
+            self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
+                                             class_mapping=self.trainer.datamodule.train_set.dataset.class_mapping)
 
     def on_load_checkpoint(self, checkpoint):
         """
         Reconstruct the model from the spec here and not in setup() as
         otherwise the weight loading will fail.
         """
-        if not isinstance(checkpoint['_module_config'], DFINESegmentationTrainingConfig):
+        module_config = checkpoint.get('_module_config')
+        if isinstance(module_config, DFINESegmentationTrainingConfig):
+            model_variant = module_config.model_variant
+            num_top_queries = module_config.num_top_queries
+        elif isinstance(module_config, dict):
+            model_variant = module_config.get('model_variant', self.hparams.config.model_variant)
+            num_top_queries = module_config.get('num_top_queries', self.hparams.config.num_top_queries)
+        else:
             raise ValueError('Checkpoint is not a D-FINE model.')
 
         data_config = checkpoint['datamodule_hyper_parameters']['data_config']
+        full_class_mapping = {'lines': data_config.line_class_mapping,
+                              'regions': data_config.region_class_mapping}
         self.net = create_model('DFINEModel',
-                                model_variant=checkpoint['_module_config'].model_variant,
+                                model_variant=model_variant,
                                 image_size=data_config.image_size,
-                                num_top_queries=checkpoint['_module_config'].num_top_queries,
-                                class_mapping={'lines': data_config.line_class_mapping,
-                                               'regions': data_config.region_class_mapping})
+                                num_top_queries=num_top_queries,
+                                class_mapping=full_class_mapping)
+        if '_canonical_class_mapping' in checkpoint:
+            self.net.user_metadata['class_mapping'] = _normalize_class_mapping(checkpoint['_canonical_class_mapping'])
 
         self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
-                                         class_mapping={'lines': data_config.line_class_mapping,
-                                                        'regions': data_config.region_class_mapping})
+                                         class_mapping=full_class_mapping)
+        self.num_classes = _num_classes_from_mapping(full_class_mapping)
 
     def on_save_checkpoint(self, checkpoint):
         """
@@ -288,6 +383,8 @@ class DFINESegmentationModel(L.LightningModule):
         shouldn't be overwritten in on_load_checkpoint.
         """
         checkpoint['_module_config'] = self.hparams.config
+        if self.net and 'class_mapping' in self.net.user_metadata:
+            checkpoint['_canonical_class_mapping'] = self.net.user_metadata['class_mapping']
 
     @classmethod
     def load_from_weights(cls,

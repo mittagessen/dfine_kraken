@@ -20,13 +20,12 @@ Command line driver for segmentation training
 """
 import click
 import logging
-import importlib
 
 from pathlib import Path
 from threadpoolctl import threadpool_limits
 from kraken.registry import OPTIMIZERS, SCHEDULERS, STOPPERS
 
-from .util import _expand_gt, _validate_manifests, message, to_ptl_device, _validate_merging, _create_class_map
+from .util import _expand_gt, _validate_manifests, message, _create_class_map
 
 logging.captureWarnings(True)
 logger = logging.getLogger('dfine')
@@ -112,22 +111,41 @@ logging.getLogger("lightning.fabric.utilities.seed").setLevel(logging.ERROR)
               '--partition',
               type=float,
               help='Ground truth data partition ratio between train/validation set')
-@click.option('-t', '--training-files', 'training_data', default=None, multiple=True,
+@click.option('-t', '--training-data', '--training-files', 'training_data', default=None, multiple=True,
               callback=_validate_manifests, type=click.File(mode='r', lazy=True),
               help='File(s) with additional paths to training data')
-@click.option('-e', '--evaluation-files', 'evaluation_data', default=None, multiple=True,
+@click.option('-e', '--evaluation-data', '--evaluation-files', 'evaluation_data', default=None, multiple=True,
               callback=_validate_manifests, type=click.File(mode='r', lazy=True),
               help='File(s) with paths to evaluation data. Overrides the `-p` parameter')
 @click.option('-f',
               '--format-type',
               type=click.Choice(['xml', 'alto', 'page']),
               help='Sets the training data format. In ALTO and PageXML mode all '
-              'data is extracted from xml files containing both baselines and a '
+              'data is extracted from xml files containing both line bounding boxes and a '
               'link to source images. In `path` mode arguments are image files '
               'sharing a prefix up to the last extension with JSON `.path` files '
-              'containing the baseline information.')
+              'containing line bbox information.')
 @click.option('-is', '--image-size', type=(int, int), help='Network input image size.')
+@click.option('--model-variant',
+              type=click.Choice(['nano', 'small', 'medium', 'large', 'extra_large']),
+              help='D-FINE model variant.')
+@click.option('--num-top-queries',
+              type=int,
+              help='Number of top query predictions used for validation/inference.')
 @click.option('--augment/--no-augment', help='Enable image augmentation')
+@click.option('--resize',
+              type=click.Choice(['union', 'new', 'fail']),
+              help='Output layer resizing option. If set to `union` new classes will be '
+                   'added, `new` will set the layer to match exactly '
+                   'the training data classes, `fail` will abort if training data and model '
+                   'classes do not match.')
+@click.option('--logger',
+              'pl_logger',
+              type=click.Choice(['tensorboard']),
+              help='Logger used by PyTorch Lightning to track metrics such as loss and accuracy.')
+@click.option('--log-dir',
+              type=click.Path(exists=True, dir_okay=True, writable=True),
+              help='Path to directory where the logger will store logs.')
 @click.option('--line-class-mapping', type=click.UNPROCESSED, hidden=True)
 @click.option('--region-class-mapping', type=click.UNPROCESSED, hidden=True)
 @click.argument('ground_truth', nargs=-1, callback=_expand_gt, type=click.Path(exists=False, dir_okay=False))
@@ -169,8 +187,11 @@ def train(ctx, **kwargs):
     from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrainingDataConfig
     from dfine.model import DFINESegmentationDataModule, DFINESegmentationModel
 
-    from lightning.pytorch import Trainer
-    from lightning.pytorch.callbacks import RichModelSummary, ModelCheckpoint, RichProgressBar
+    from lightning.pytorch.callbacks import ModelCheckpoint
+    from kraken.train.utils import KrakenOnExceptionCheckpoint, KrakenTrainer
+    from kraken.models.convert import convert_models
+    from rich.console import Console
+    from rich.table import Table
 
     torch.set_float32_matmul_precision('high')
 
@@ -192,7 +213,8 @@ def train(ctx, **kwargs):
     else:
         val_check_interval = {'val_check_interval': params['freq']}
 
-    cbs = []
+    cbs = [KrakenOnExceptionCheckpoint(dirpath=params.get('checkpoint_path'),
+                                       filename='checkpoint_abort')]
     checkpoint_callback = ModelCheckpoint(dirpath=params.pop('checkpoint_path'),
                                           save_top_k=10,
                                           monitor='val_metric',
@@ -205,53 +227,62 @@ def train(ctx, **kwargs):
     m_config = DFINESegmentationTrainingConfig(**params)
 
     if resume:
-        data_module = DFINESegmentationDataModule.load_from_checkpoint(resume)
+        data_module = DFINESegmentationDataModule.load_from_checkpoint(resume, weights_only=False)
     else:
         data_module = DFINESegmentationDataModule(dm_config)
 
-    message('Training line types:')
-    for k, v in data_module.train_set.dataset.class_mapping['lines'].items():
-        message(f'  {k}\t{v}\t{data_module.train_set.dataset.class_stats["lines"][k]}')
-    message('Training region types:')
-    for k, v in data_module.train_set.dataset.class_mapping['regions'].items():
-        message(f'  {k}\t{v}\t{data_module.train_set.dataset.class_stats["regions"][k]}')
+    ds = data_module.train_set.dataset
+    canonical = ds.canonical_class_mapping
+    merged = ds.merged_classes
 
-    if not params['verbose']:
-        cbs.append(RichProgressBar(leave=True))
+    table = Table(title='Training Class Summary')
+    table.add_column('Category')
+    table.add_column('Class')
+    table.add_column('Label Index', justify='right')
+    table.add_column('Merged With')
+    table.add_column('Count', justify='right')
 
-    trainer = Trainer(accelerator=ctx.meta['accelerator'],
-                      devices=ctx.meta['devices'],
-                      precision=ctx.meta['precision'],
-                      max_epochs=params['epochs'] if params['quit'] == 'fixed' else -1,
-                      min_epochs=params['min_epochs'],
-                      enable_progress_bar=True if not ctx.meta['verbose'] else False,
-                      deterministic=ctx.meta['deterministic'],
-                      enable_model_summary=True,
-                      accumulate_grad_batches=params['accumulate_grad_batches'],
-                      callbacks=cbs,
-                      gradient_clip_val=params['gradient_clip_val'],
-                      num_sanity_val_steps=0,
-                      **val_check_interval)
+    for section in ('lines', 'regions'):
+        for cls_name, idx in canonical[section].items():
+            aliases = merged[section].get(cls_name, [])
+            merged_str = ', '.join(aliases) if aliases else ''
+            count = ds.class_stats[section].get(cls_name, 0)
+            for alias in aliases:
+                count += ds.class_stats[section].get(alias, 0)
+            table.add_row(section, cls_name, str(idx), merged_str, str(count))
+
+    Console(stderr=True).print(table)
+
+    trainer = KrakenTrainer(accelerator=ctx.meta['accelerator'],
+                            devices=ctx.meta['device'],
+                            precision=ctx.meta['precision'],
+                            max_epochs=params['epochs'] if params['quit'] == 'fixed' else -1,
+                            min_epochs=params['min_epochs'],
+                            enable_progress_bar=True if not ctx.meta['verbose'] else False,
+                            deterministic=ctx.meta['deterministic'],
+                            enable_model_summary=True,
+                            accumulate_grad_batches=params['accumulate_grad_batches'],
+                            callbacks=cbs,
+                            gradient_clip_val=params['gradient_clip_val'],
+                            num_sanity_val_steps=0,
+                            use_distributed_sampler=False,
+                            pl_logger=params.get('pl_logger'),
+                            log_dir=params.get('log_dir'),
+                            **val_check_interval)
 
     with trainer.init_module(empty_init=False if (load or resume) else True):
         if load:
             message(f'Loading from checkpoint {load}.')
             if load.endswith('ckpt'):
-                model = DFINESegmentationModel.load_from_checkpoint(load, config=m_config)
+                model = DFINESegmentationModel.load_from_checkpoint(load, config=m_config, weights_only=False)
             else:
                 model = DFINESegmentationModel.load_from_weights(load, config=m_config)
         elif resume:
             message(f'Resuming from checkpoint {resume}.')
-            model = DFINESegmentationModel.load_from_checkpoint(resume)
+            model = DFINESegmentationModel.load_from_checkpoint(resume, weights_only=False)
         else:
             message('Initializing new model.')
             model = DFINESegmentationModel(m_config)
-
-    try:
-        (entry_point,) = importlib.metadata.entry_points(group='kraken.writers', name=params['weights_format'])
-        writer = entry_point.load()
-    except ValueError:
-        raise click.UsageError('weights_format', 'Unknown format `{params.get("weights_format")}` for weights.')
 
     with threadpool_limits(limits=ctx.meta['num_threads']):
         if resume:
@@ -261,6 +292,5 @@ def train(ctx, **kwargs):
 
     score = checkpoint_callback.best_model_score.item()
     weight_path = Path(checkpoint_callback.best_model_path).with_name(f'best_{score:.4f}.{params.get("weights_format")}')
-    model = DFINESegmentationModel.load_from_checkpoint(checkpoint_callback.best_model_path, config=m_config)
-    opath = writer([model.net], weight_path)
+    opath = convert_models([checkpoint_callback.best_model_path], weight_path, weights_format=params['weights_format'])
     message(f'Converting best model {checkpoint_callback.best_model_path} (score: {score:.4f}) to weights {opath}')

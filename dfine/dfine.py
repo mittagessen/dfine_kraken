@@ -1,9 +1,11 @@
 import uuid
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 
 from lightning.fabric import Fabric
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Optional
+import copy
 
 from kraken.models import SegmentationBaseModel
 
@@ -14,6 +16,11 @@ if TYPE_CHECKING:
     from PIL import Image
     from kraken.containers import Segmentation
     from kraken.configs import SegmentationInferenceConfig
+
+
+def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    return {'lines': dict(class_mapping.get('lines', {})),
+            'regions': dict(class_mapping.get('regions', {}))}
 
 
 class DFINEModel(nn.Module, SegmentationBaseModel):
@@ -41,10 +48,13 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         if kwargs.get('num_top_queries', None) is None:
             raise ValueError('num_top_queries argument is missing in args.')
 
+        class_mapping = _normalize_class_mapping(class_mapping)
+        kwargs['class_mapping'] = class_mapping
+
         self.user_metadata.update({'accuracy': [], 'metrics': []})
         self.user_metadata.update(kwargs)
 
-        model_cfg = models[model_variant]
+        model_cfg = copy.deepcopy(models[model_variant])
         model_cfg["HybridEncoder"]["eval_spatial_size"] = image_size
         model_cfg["DFINETransformer"]["eval_spatial_size"] = image_size
 
@@ -53,6 +63,58 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         self.backbone = HGNetv2(**model_cfg["HGNetv2"])
         self.encoder = HybridEncoder(**model_cfg["HybridEncoder"])
         self.decoder = DFINETransformer(num_classes=self.num_classes, **model_cfg["DFINETransformer"])
+
+    @staticmethod
+    def _resize_linear_out(layer: nn.Linear, output_size: int, del_indices: Optional[set[int]] = None) -> nn.Linear:
+        del_indices = del_indices or set()
+        old_out, in_features = layer.weight.shape
+        keep_indices = [idx for idx in range(old_out) if idx not in del_indices]
+        new_layer = nn.Linear(in_features, output_size, bias=layer.bias is not None)
+        new_layer = new_layer.to(device=layer.weight.device, dtype=layer.weight.dtype)
+        copy_rows = min(len(keep_indices), output_size)
+        if copy_rows:
+            new_layer.weight.data[:copy_rows] = layer.weight.data[keep_indices[:copy_rows]]
+            if layer.bias is not None:
+                new_layer.bias.data[:copy_rows] = layer.bias.data[keep_indices[:copy_rows]]
+        return new_layer
+
+    @staticmethod
+    def _resize_embedding_rows(embedding: nn.Embedding, num_classes: int, del_indices: Optional[set[int]] = None) -> nn.Embedding:
+        del_indices = del_indices or set()
+        old_padding_idx = embedding.padding_idx
+        keep_indices = [idx for idx in range(embedding.num_embeddings) if idx not in del_indices and idx != old_padding_idx]
+        new_embedding = nn.Embedding(num_classes + 1, embedding.embedding_dim, padding_idx=num_classes)
+        new_embedding = new_embedding.to(device=embedding.weight.device, dtype=embedding.weight.dtype)
+        init.normal_(new_embedding.weight)
+        copy_rows = min(len(keep_indices), num_classes)
+        if copy_rows:
+            new_embedding.weight.data[:copy_rows] = embedding.weight.data[keep_indices[:copy_rows]]
+        if old_padding_idx is not None:
+            new_embedding.weight.data[num_classes] = embedding.weight.data[old_padding_idx]
+        return new_embedding
+
+    def resize_output(self, output_size: int, del_indices: Optional[list[int]] = None) -> None:
+        """
+        Resizes all class-dependent output heads to `output_size`.
+        """
+        if output_size <= 0:
+            raise ValueError(f'output_size must be positive (got {output_size})')
+
+        del_set = set(del_indices or [])
+        decoder = self.decoder
+
+        if decoder.query_select_method != "agnostic":
+            decoder.enc_score_head = self._resize_linear_out(decoder.enc_score_head, output_size, del_set)
+
+        decoder.dec_score_head = nn.ModuleList(
+            [self._resize_linear_out(head, output_size, del_set) for head in decoder.dec_score_head]
+        )
+
+        if getattr(decoder, 'denoising_class_embed', None) is not None:
+            decoder.denoising_class_embed = self._resize_embedding_rows(decoder.denoising_class_embed, output_size, del_set)
+
+        decoder.num_classes = output_size
+        self.num_classes = output_size
 
     def forward(self, x, targets=None):
         x = self.backbone(x)
@@ -87,10 +149,12 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         # invert class_mapping
         self.line_map = {}
         self.region_map = {}
-        for cls, idx in self.user_metadata['class_mapping']['lines'].items():
+        class_mapping = _normalize_class_mapping(self.user_metadata['class_mapping'])
+        self.user_metadata['class_mapping'] = class_mapping
+        for cls, idx in class_mapping['lines'].items():
             # there might be multiple classes mapping to the same index -> pick the first one.
             self.line_map.setdefault(idx, cls)
-        for cls, idx in self.user_metadata['class_mapping']['regions'].items():
+        for cls, idx in class_mapping['regions'].items():
             self.region_map.setdefault(idx, cls)
 
     @torch.inference_mode()
@@ -124,7 +188,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         scores = scores.squeeze()
         boxes = boxes.squeeze()
         labels = labels.squeeze()
-        mask = scores[labels] >= 0.5
+        mask = scores >= 0.5
         boxes, labels = boxes[mask].cpu(), labels[mask].cpu().tolist()
 
         regions = defaultdict(list)

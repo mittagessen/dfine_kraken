@@ -37,6 +37,14 @@ if TYPE_CHECKING:
     from kraken.containers import Segmentation
 
 
+def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    """
+    Normalizes class mapping keys to D-FINE line/region conventions.
+    """
+    return {'lines': dict(class_mapping.get('lines', {})),
+            'regions': dict(class_mapping.get('regions', {}))}
+
+
 def collate_batch(batch):
     """
     Collates an object detection batch.
@@ -86,7 +94,7 @@ class XMLDetectionDataset(Dataset):
                  augmentation_config: dict = AUGMENTATION_CONFIG,
                  image_size: tuple[int, int] = (1280, 1280)):
         super().__init__()
-        self.class_mapping = class_mapping
+        self.class_mapping = _normalize_class_mapping(class_mapping)
         self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values()) + 1
 
         self.failed_samples = set()
@@ -161,7 +169,7 @@ class XMLDetectionDataset(Dataset):
             try:
                 idx = self.class_mapping['lines'][tag]
                 objs[idx].append(polygon_to_cxcywh(line.boundary, wh))
-                self.class_stats['lines'][idx] += 1
+                self.class_stats['lines'][tag] += 1
             except (KeyError, TypeError):
                 continue
 
@@ -170,7 +178,7 @@ class XMLDetectionDataset(Dataset):
                 idx = self.class_mapping['regions'][k]
                 v = torch.Tensor([polygon_to_cxcywh(x.boundary, wh) for x in v if x.boundary])
                 objs[idx].extend(v)
-                self.class_stats['regions'][idx] += len(v)
+                self.class_stats['regions'][k] += len(v)
             except (KeyError, TypeError):
                 continue
         self.targets.append(objs)
@@ -210,3 +218,36 @@ class XMLDetectionDataset(Dataset):
 
     def close_mosaic(self):
         self.mosaic_prob = 0.0
+
+    @property
+    def canonical_class_mapping(self) -> dict[str, dict[str, int]]:
+        """
+        Returns a one-to-one class mapping (one string per label index).
+        """
+        result = {}
+        for section, sub_dict in self.class_mapping.items():
+            seen_indices = set()
+            canonical = {}
+            for key, idx in sub_dict.items():
+                if idx not in seen_indices:
+                    seen_indices.add(idx)
+                    canonical[key] = idx
+            result[section] = canonical
+        return result
+
+    @property
+    def merged_classes(self) -> dict[str, dict[str, list[str]]]:
+        """
+        Returns merged class info: {section: {canonical_name: [aliases]}}.
+        """
+        result = {}
+        for section, sub_dict in self.class_mapping.items():
+            idx_to_names = defaultdict(list)
+            for key, idx in sub_dict.items():
+                idx_to_names[idx].append(key)
+            merged = {}
+            for names in idx_to_names.values():
+                if len(names) > 1:
+                    merged[names[0]] = names[1:]
+            result[section] = merged
+        return result
