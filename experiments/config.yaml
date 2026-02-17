@@ -1,13 +1,13 @@
 precision: bf16-mixed
 device: cuda:0
-workers: 16
-threads: 1
+num_workers: 16
+num_threads: 1
 train:
   training_data: 
     - train.lst
   evaluation_data: 
     - val.lst
-  output: checkpoints
+  checkpoint_path: checkpoints
   weights_format: safetensors
   line_class_mapping:  # Remove key completely to map each class to an individual index automatically.
     - ['*', 3]  # '*' is a special value that matches all strings. It can be
