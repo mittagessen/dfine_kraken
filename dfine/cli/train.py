@@ -141,7 +141,7 @@ logging.getLogger("lightning.fabric.utilities.seed").setLevel(logging.ERROR)
                    'classes do not match.')
 @click.option('--logger',
               'pl_logger',
-              type=click.Choice(['tensorboard']),
+              type=click.Choice(['tensorboard', 'wandb']),
               help='Logger used by PyTorch Lightning to track metrics such as loss and accuracy.')
 @click.option('--log-dir',
               type=click.Path(exists=True, dir_okay=True, writable=True),
@@ -175,6 +175,12 @@ def train(ctx, **kwargs):
             import tensorboard  # NOQA
         except ImportError:
             raise click.BadOptionUsage('logger', 'tensorboard logger needs the `tensorboard` package installed.')
+
+    if params.get('pl_logger') == 'wandb':
+        try:
+            import wandb  # NOQA
+        except ImportError:
+            raise click.BadOptionUsage('logger', 'wandb logger needs the `wandb` package installed.')
 
     # parse line_class_mapping
     if isinstance(line_cls_map := params.get('line_class_mapping'), list):

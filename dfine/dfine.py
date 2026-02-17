@@ -135,9 +135,9 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
                               devices=self._inf_config.device,
                               precision=self._inf_config.precision)
 
-        for x in [self.backbone, self.encoder, self.decoder]:
-            x =  self._fabric._precision.convert_module(x)
-            x = self._fabric.to_device(x)
+        self.backbone = self._fabric.to_device(self._fabric._precision.convert_module(self.backbone))
+        self.encoder = self._fabric.to_device(self._fabric._precision.convert_module(self.encoder))
+        self.decoder = self._fabric.to_device(self._fabric._precision.convert_module(self.decoder))
 
         _m_dtype = next(self.parameters()).dtype
 
@@ -171,7 +171,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         from kraken.containers import Segmentation, Region, BBoxLine
 
         orig_size = self._fabric.to_device(torch.tensor(tuple(im.size * 2)))
-        scaled_im = self.transforms(im).unsqueeze(0)
+        scaled_im = self._fabric.to_device(self.transforms(im).unsqueeze(0))
         outputs = self(scaled_im)
         logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
         boxes = box_convert(boxes, in_fmt='cxcywh', out_fmt='xyxy') * orig_size
