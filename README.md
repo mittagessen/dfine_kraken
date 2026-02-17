@@ -19,11 +19,10 @@ Clone the repository and run:
 $ pip install .
 ```
 
-This will install a CLI hook on ketos that can be used to train models (or use the alternative `dfine` command):
+This will install a `dfine` that can be used to train models:
 
 ```bash
 $ dfine ... train ...
-$ ketos ... dfine_train ... 
 ```
 
 ## Training
