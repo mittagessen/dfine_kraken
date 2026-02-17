@@ -15,7 +15,7 @@ train:
     - ['DefaultLine', 3]  # if you use '*' you can make sure you also need to
                           # define a merged class identifier. Otherwise a random one will be picked.
     - ['Marginal_Note', 4]
-  # line_class_mapping: {}  # Set to empty dictionary to train only on regions.
+  # line_class_mapping: []  # Set to empty list to train only on regions.
   region_class_mapping: 
     - ['*', 5]  # same semantics as line_class_mapping.
     - ['Text_Region', 5]
