@@ -149,8 +149,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         # invert class_mapping
         self.line_map = {}
         self.region_map = {}
-        class_mapping = _normalize_class_mapping(self.user_metadata['class_mapping'])
-        self.user_metadata['class_mapping'] = class_mapping
+        class_mapping = self.user_metadata['class_mapping']
         for cls, idx in class_mapping['lines'].items():
             # there might be multiple classes mapping to the same index -> pick the first one.
             self.line_map.setdefault(idx, cls)

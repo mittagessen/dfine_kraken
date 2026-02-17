@@ -37,14 +37,6 @@ if TYPE_CHECKING:
     from kraken.containers import Segmentation
 
 
-def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
-    """
-    Normalizes class mapping keys to D-FINE line/region conventions.
-    """
-    return {'lines': dict(class_mapping.get('lines', {})),
-            'regions': dict(class_mapping.get('regions', {}))}
-
-
 def collate_batch(batch):
     """
     Collates an object detection batch.
@@ -94,7 +86,7 @@ class XMLDetectionDataset(Dataset):
                  augmentation_config: dict = AUGMENTATION_CONFIG,
                  image_size: tuple[int, int] = (1280, 1280)):
         super().__init__()
-        self.class_mapping = _normalize_class_mapping(class_mapping)
+        self.class_mapping = class_mapping
         self.num_classes = max(max(v.values()) if v else 0 for v in self.class_mapping.values()) + 1
 
         self.failed_samples = set()

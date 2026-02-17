@@ -46,11 +46,6 @@ logger = logging.getLogger(__name__)
 __all__ = ['DFINESegmentationDataModule', 'DFINESegmentationModel']
 
 
-def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
-    return {'lines': dict(class_mapping.get('lines', {})),
-            'regions': dict(class_mapping.get('regions', {}))}
-
-
 def _num_classes_from_mapping(class_mapping: dict[str, dict[str, int]]) -> int:
     return max((v for d in class_mapping.values() for v in d.values()), default=0) + 1
 
@@ -152,7 +147,7 @@ class DFINESegmentationDataModule(L.LightningDataModule):
                 raise ValueError('No valid test data provided. Please add some.')
             test_set = self._build_dataset(self.test_data,
                                            image_size=self.hparams.data_config.image_size,
-                                           class_mapping=_normalize_class_mapping(self.trainer.lightning_module.net.user_metadata['class_mapping']))
+                                           class_mapping=self.trainer.lightning_module._full_class_mapping)
             self.test_set = Subset(test_set, range(len(test_set)))
             if len(self.test_set) == 0:
                 raise ValueError('No valid test data provided. Please add some.')
@@ -196,8 +191,7 @@ class DFINESegmentationModel(L.LightningModule):
 
             if self.net.model_type and 'segmentation' not in self.net.model_type:
                 raise ValueError(f'Model {model} is of type {self.net.model_type} while `segmentation` is expected.')
-            if 'class_mapping' in self.net.user_metadata:
-                self.net.user_metadata['class_mapping'] = _normalize_class_mapping(self.net.user_metadata['class_mapping'])
+            self._full_class_mapping = self.net.user_metadata.get('_full_class_mapping')
         else:
             self.net = None
 
@@ -259,7 +253,9 @@ class DFINESegmentationModel(L.LightningModule):
 
     def setup(self, stage: Optional[str] = None):
         if stage in [None, 'fit']:
-            set_class_mapping = _normalize_class_mapping(self.trainer.datamodule.train_set.dataset.class_mapping)
+            ds = self.trainer.datamodule.train_set.dataset
+            set_class_mapping = {'lines': dict(ds.class_mapping['lines']),
+                                 'regions': dict(ds.class_mapping['regions'])}
             if self.net is None:
                 self.net = create_model('DFINEModel',
                                         model_variant=self.hparams.config.model_variant,
@@ -267,7 +263,9 @@ class DFINESegmentationModel(L.LightningModule):
                                         num_top_queries=self.hparams.config.num_top_queries,
                                         class_mapping=set_class_mapping)
             else:
-                net_class_mapping = _normalize_class_mapping(self.net.user_metadata.get('class_mapping', set_class_mapping))
+                _raw = self.net.user_metadata.get('class_mapping', set_class_mapping)
+                net_class_mapping = {'lines': dict(_raw.get('lines', {})),
+                                     'regions': dict(_raw.get('regions', {}))}
                 if set_class_mapping['lines'].keys() != net_class_mapping['lines'].keys() or \
                    set_class_mapping['regions'].keys() != net_class_mapping['regions'].keys():
 
@@ -342,6 +340,9 @@ class DFINESegmentationModel(L.LightningModule):
                 self.trainer.datamodule.val_set.dataset.class_mapping = net_class_mapping
                 self.trainer.datamodule.val_set.dataset.num_classes = num_classes
 
+            self._full_class_mapping = {'lines': dict(self.trainer.datamodule.train_set.dataset.class_mapping['lines']),
+                                        'regions': dict(self.trainer.datamodule.train_set.dataset.class_mapping['regions'])}
+            self.net.user_metadata['_full_class_mapping'] = self._full_class_mapping
             self.net.user_metadata['class_mapping'] = self.trainer.datamodule.train_set.dataset.canonical_class_mapping
             self.num_classes = _num_classes_from_mapping(self.trainer.datamodule.train_set.dataset.class_mapping)
             self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
@@ -370,8 +371,11 @@ class DFINESegmentationModel(L.LightningModule):
                                 image_size=data_config.image_size,
                                 num_top_queries=num_top_queries,
                                 class_mapping=full_class_mapping)
+        self._full_class_mapping = full_class_mapping
+        self.net.user_metadata['_full_class_mapping'] = full_class_mapping
         if '_canonical_class_mapping' in checkpoint:
-            self.net.user_metadata['class_mapping'] = _normalize_class_mapping(checkpoint['_canonical_class_mapping'])
+            self.net.user_metadata['class_mapping'] = {'lines': dict(checkpoint['_canonical_class_mapping'].get('lines', {})),
+                                                        'regions': dict(checkpoint['_canonical_class_mapping'].get('regions', {}))}
 
         self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
                                          class_mapping=full_class_mapping)
