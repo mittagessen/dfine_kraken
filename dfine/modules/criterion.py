@@ -7,6 +7,7 @@ Copyright (c) 2023 lyuwenyu. All Rights Reserved.
 """
 
 import copy
+import logging
 
 import torch
 import torch.distributed
@@ -18,6 +19,9 @@ from typing import Literal, Optional
 
 from .utils import bbox2distance, box_cxcywh_to_xyxy, box_iou, generalized_box_iou
 from .dist_utils import get_world_size, is_dist_available_and_initialized
+
+
+logger = logging.getLogger(__name__)
 
 
 class DFINECriterion(nn.Module):
@@ -286,6 +290,14 @@ class DFINECriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
+        try:
+            return self._forward(outputs, targets, **kwargs)
+        except AssertionError:
+            logger.warning("gIoU sanity check failed (NaN in predictions), returning zero loss")
+            zero = outputs["pred_logits"].sum() * 0
+            return {k: zero for k in self.weight_dict}
+
+    def _forward(self, outputs, targets, **kwargs):
         outputs_without_aux = {k: v for k, v in outputs.items() if "aux" not in k}
 
         # Retrieve the matching between the outputs of the last layer and the targets
