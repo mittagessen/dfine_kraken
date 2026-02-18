@@ -204,15 +204,19 @@ class DFINESegmentationModel(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss = model_step(self.net, self.criterion, batch)
+        total_loss = sum(loss.values())
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            logger.warning(f'NaN/Inf loss detected at batch {batch_idx}, replacing with zero loss')
+            total_loss = 0.0 * sum(p.sum() for p in self.net.parameters() if p.requires_grad)
         self.log('loss',
-                 sum(loss.values()),
+                 total_loss,
                  batch_size=batch['images'].shape[0],
                  on_step=True,
                  on_epoch=True,
                  prog_bar=True,
                  logger=True)
         self.log('global_step', self.global_step, on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
-        return sum(loss.values())
+        return total_loss
 
     def validation_step(self, batch, batch_idx):
         img_size = torch.tensor(tuple(batch['images'].shape[2:] * 2), device=batch['images'].device)
