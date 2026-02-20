@@ -19,6 +19,7 @@ import torch
 import logging
 import lightning.pytorch as L
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Union
 from torch.optim import lr_scheduler
 from torchvision.ops import box_convert
@@ -28,7 +29,7 @@ from torch.utils.data import DataLoader, Subset, random_split
 
 from kraken.lib.xml import XMLPage
 from kraken.models import create_model
-from kraken.train.utils import configure_optimizer_and_lr_scheduler
+from kraken.train.utils import TestMetrics, configure_optimizer_and_lr_scheduler
 
 from dfine.modules import build_criterion
 from dfine.dataset import XMLDetectionDataset, collate_batch
@@ -43,11 +44,48 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-__all__ = ['DFINESegmentationDataModule', 'DFINESegmentationModel']
+@dataclass
+class DFINEDetectionTestMetrics(TestMetrics):
+    map_50: float = 0.0
+    map_50_95: float = 0.0
+    precision: float = 0.0
+    recall: float = 0.0
+    f1: float = 0.0
+    per_class_metrics: dict = field(default_factory=dict)
+
+
+__all__ = ['DFINESegmentationDataModule', 'DFINESegmentationModel', 'DFINEDetectionTestMetrics']
 
 
 def _num_classes_from_mapping(class_mapping: dict[str, dict[str, int]]) -> int:
     return max((v for d in class_mapping.values() for v in d.values()), default=0) + 1
+
+
+def _iou_threshold_index(metric: MeanAveragePrecision, threshold: float = 0.5) -> int:
+    iou_thresholds = getattr(metric, 'iou_thresholds', None)
+    if iou_thresholds is None:
+        return 0
+    for idx, value in enumerate(iou_thresholds):
+        if abs(float(value) - threshold) < 1e-6:
+            return idx
+    return 0
+
+
+def _mean_valid(values: torch.Tensor) -> torch.Tensor:
+    values = values.reshape(-1)
+    if values.numel() == 0:
+        return values.new_tensor(0.0)
+    valid = values[values >= 0]
+    if valid.numel() == 0:
+        return values.new_tensor(0.0)
+    return valid.mean()
+
+
+def _metric_value(values: torch.Tensor, idx: int) -> float:
+    if idx >= values.numel():
+        return 0.0
+    value = float(values[idx].item())
+    return value if value >= 0 else 0.0
 
 
 def model_step(model, criterion, batch):
@@ -145,9 +183,27 @@ class DFINESegmentationDataModule(L.LightningDataModule):
         elif stage == 'test':
             if len(self.test_data) == 0:
                 raise ValueError('No valid test data provided. Please add some.')
+
+            mode = getattr(self.hparams.data_config, 'test_class_mapping_mode', 'full')
+            if mode == 'custom':
+                class_mapping = {'lines': self.hparams.data_config.line_class_mapping,
+                                 'regions': self.hparams.data_config.region_class_mapping}
+            elif mode == 'full':
+                full = getattr(self.trainer.lightning_module, '_full_class_mapping', None)
+                if full is not None:
+                    class_mapping = full
+                else:
+                    logger.warning('Full class mapping not available (model loaded '
+                                   'from weights file). Falling back to canonical mapping.')
+                    class_mapping = self.trainer.lightning_module.net.user_metadata['class_mapping']
+            elif mode == 'canonical':
+                class_mapping = self.trainer.lightning_module.net.user_metadata['class_mapping']
+            else:
+                raise ValueError(f'Invalid test_class_mapping_mode: {mode}')
+
             test_set = self._build_dataset(self.test_data,
                                            image_size=self.hparams.data_config.image_size,
-                                           class_mapping=self.trainer.lightning_module._full_class_mapping)
+                                           class_mapping=class_mapping)
             self.test_set = Subset(test_set, range(len(test_set)))
             if len(self.test_set) == 0:
                 raise ValueError('No valid test data provided. Please add some.')
@@ -197,6 +253,7 @@ class DFINESegmentationModel(L.LightningModule):
 
         self.map = MeanAveragePrecision(box_format='xyxy',
                                         iou_type='bbox',
+                                        class_metrics=True,
                                         extended_summary=True)
 
     def forward(self, x):
@@ -241,9 +298,10 @@ class DFINESegmentationModel(L.LightningModule):
 
     def on_validation_epoch_end(self):
         metrics = self.map.compute()
-        precision = metrics['precision'][0][50].mean()
-        recall = metrics['recall'][0].mean()
-        f1 = 2 * (precision * recall) / (precision + recall)
+        iou_50_idx = _iou_threshold_index(self.map, 0.5)
+        precision = _mean_valid(metrics['precision'][iou_50_idx, :, :, 0, -1])
+        recall = _mean_valid(metrics['recall'][iou_50_idx, :, 0, -1])
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall).item() > 0 else precision.new_tensor(0.0)
         self.log_dict({'mAP_50': metrics['map_50'],
                        'mAP_50_95': metrics['map'],
                        'precision': precision,
@@ -253,6 +311,72 @@ class DFINESegmentationModel(L.LightningModule):
                       prog_bar=True,
                       logger=True)
         self.log('val_metric', metrics['map_50'], prog_bar=False)
+        self.map.reset()
+
+    def test_step(self, batch, batch_idx):
+        img_size = torch.tensor(tuple(batch['images'].shape[2:] * 2), device=batch['images'].device)
+
+        outputs = self.net(batch['images'])
+        pred_logits, pred_boxes = outputs["pred_logits"], outputs["pred_boxes"]
+        pred_boxes = box_convert(pred_boxes, in_fmt='cxcywh', out_fmt='xyxy') * img_size
+
+        pred_scores = pred_logits.sigmoid()
+        pred_scores, index = torch.topk(pred_scores.flatten(1), self.hparams.config.num_top_queries, dim=-1)
+        pred_labels = index - index // self.num_classes * self.num_classes
+        index = index // self.num_classes
+        pred_boxes = pred_boxes.gather(dim=1, index=index.unsqueeze(-1).repeat(1, 1, pred_boxes.shape[-1]))
+
+        preds = [dict(labels=lab,
+                      boxes=box,
+                      scores=sco) for lab, box, sco in zip(pred_labels, pred_boxes, pred_scores)]
+        targets = [dict(labels=target['labels'],
+                        boxes=box_convert(target['boxes'], in_fmt='cxcywh', out_fmt='xyxy') * img_size) for target in batch['target']]
+
+        self.map(preds, targets)
+
+    def on_test_epoch_end(self):
+        metrics = self.map.compute()
+        iou_50_idx = _iou_threshold_index(self.map, 0.5)
+        precision_tensor = metrics['precision']
+        recall_tensor = metrics['recall']
+        precision = _mean_valid(precision_tensor[iou_50_idx, :, :, 0, -1])
+        recall = _mean_valid(recall_tensor[iou_50_idx, :, 0, -1])
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall).item() > 0 else precision.new_tensor(0.0)
+
+        # build per-class metrics
+        per_class = {}
+        class_mapping = self.trainer.datamodule.test_set.dataset.class_mapping
+        canonical = self.net.user_metadata.get('class_mapping', class_mapping)
+        idx_to_name = {}
+        for section in ('lines', 'regions'):
+            for name, idx in canonical[section].items():
+                idx_to_name[idx] = name
+
+        map_per_class = metrics.get('map_per_class', precision_tensor.new_empty(0)).reshape(-1)
+        mar_100_per_class = metrics.get('mar_100_per_class', precision_tensor.new_empty(0)).reshape(-1)
+        classes = metrics.get('classes', torch.tensor([])).reshape(-1)
+
+        cls_precisions = [_mean_valid(precision_tensor[iou_50_idx, :, cls_pos, 0, -1]).item()
+                          for cls_pos in range(precision_tensor.shape[2])]
+        for i, cls_idx in enumerate(classes.tolist()):
+            cls_name = idx_to_name.get(int(cls_idx), str(int(cls_idx)))
+            cls_map_50_95 = _metric_value(map_per_class, i)
+            cls_recall = _metric_value(mar_100_per_class, i)
+            cls_p = cls_precisions[i] if i < len(cls_precisions) else 0.0
+            cls_f1 = 2 * (cls_p * cls_recall) / (cls_p + cls_recall) if (cls_p + cls_recall) > 0 else 0.0
+            per_class[cls_name] = {'map_50_95': cls_map_50_95,
+                                   'precision': cls_p,
+                                   'recall': cls_recall,
+                                   'f1': cls_f1}
+
+        self.test_metrics = DFINEDetectionTestMetrics(
+            map_50=metrics['map_50'].item(),
+            map_50_95=metrics['map'].item(),
+            precision=precision.item(),
+            recall=recall.item(),
+            f1=f1.item() if isinstance(f1, torch.Tensor) else f1,
+            per_class_metrics=per_class,
+        )
         self.map.reset()
 
     def setup(self, stage: Optional[str] = None):
@@ -351,6 +475,8 @@ class DFINESegmentationModel(L.LightningModule):
             self.num_classes = _num_classes_from_mapping(self.trainer.datamodule.train_set.dataset.class_mapping)
             self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
                                              class_mapping=self.trainer.datamodule.train_set.dataset.class_mapping)
+        elif stage == 'test':
+            self.num_classes = _num_classes_from_mapping(self.trainer.datamodule.test_set.dataset.class_mapping)
 
     def on_load_checkpoint(self, checkpoint):
         """

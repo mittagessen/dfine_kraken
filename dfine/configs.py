@@ -33,6 +33,25 @@ class DFINESegmentationTrainingDataConfig(SegmentationTrainingDataConfig):
         super().__init__(**kwargs)
 
 
+class DFINESegmentationTestDataConfig(DFINESegmentationTrainingDataConfig):
+    """
+    Test data configuration for evaluating D-FINE segmentation models.
+
+    Arg:
+        test_class_mapping_mode (Literal['full', 'canonical', 'custom'], defaults to 'full'):
+            Selects how class mappings are determined for the test dataset.
+            - 'full': Use the full (potentially many-to-one) mapping from the
+              training checkpoint. Falls back to 'canonical' with a warning
+              when loading from weights files.
+            - 'canonical': Use the canonical (one-to-one) mapping from the model.
+            - 'custom': Use the inherited line_class_mapping/region_class_mapping
+              fields from the parent config.
+    """
+    def __init__(self, **kwargs):
+        self.test_class_mapping_mode = kwargs.pop('test_class_mapping_mode', 'full')
+        super().__init__(**kwargs)
+
+
 base_cfg = {
     "HGNetv2": {
         "pretrained": False,

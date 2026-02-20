@@ -7,9 +7,10 @@ from rich.logging import RichHandler
 from rich.traceback import install
 from kraken.registry import PRECISIONS
 from kraken.configs import Config, TrainingDataConfig
-from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrainingDataConfig
+from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrainingDataConfig, DFINESegmentationTestDataConfig
 
 from .train import train
+from .test import test
 from .util import _load_config, to_ptl_device
 
 
@@ -38,7 +39,8 @@ Image.MAX_IMAGE_PIXELS = 20000 ** 2
 @click.group(context_settings=dict(show_default=True,
                                    default_map={**Config().__dict__,
                                                 **TrainingDataConfig().__dict__,
-                                                'train': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTrainingDataConfig().__dict__}}))
+                                                'train': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTrainingDataConfig().__dict__},
+                                                'test': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTestDataConfig().__dict__}}))
 @click.version_option()
 @click.pass_context
 @click.option('-v', '--verbose', default=0, count=True)
@@ -86,6 +88,7 @@ def dfine(ctx, **kwargs):
 
 
 dfine.add_command(train)
+dfine.add_command(test)
 
 if __name__ == '__main__':
     dfine()
