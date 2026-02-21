@@ -59,3 +59,30 @@ and then run `kraken ... segment ...` as usual:
 ```bash
 $ kraken -i input.jpg out.xml -a segment -i dfine.safetensors
 ```
+
+### Pretrained Models
+
+Pretrained region segmentation models trained on the
+[LADaS](https://github.com/DEFI-COLaF/LADaS/) dataset using the
+[SegmOnto](https://segmonto.github.io/) taxonomy (37 region types) are
+available for all model variants. They can be downloaded with `kraken download`:
+
+| Variant     | Size    | mAP@50 | Download command                         |
+|-------------|---------|--------|------------------------------------------|
+| nano        | ~15 MB  | 0.2960 | `kraken get 10.5281/zenodo.18715384`|
+| small       | ~42 MB  | 0.3864 | `kraken get 10.5281/zenodo.18715381`|
+| medium      | ~79 MB  | 0.3915 | `kraken get 10.5281/zenodo.18715373`|
+| large       | ~126 MB | 0.4308 | `kraken get 10.5281/zenodo.18715364`|
+| extra_large | ~252 MB | 0.4164 | `kraken get 10.5281/zenodo.18715367`|
+
+The **large** variant achieves the best performance. The extra_large variant
+shows slight regression likely due to overfitting, so the large model is
+recommended for best accuracy.
+
+```bash
+$ kraken get 10.5281/zenodo.18715373
+Processing ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 79.1/79.1 MB 0:00:00 0:00:02
+Model dir: /home/mittagessen/.local/share/htrmopo/d58d541d-82cf-5ab2-b27b-a20fe2548229 (model files: ladas_m.safetensors)
+$ kraken -i input.jpg out.xml -a segment -i ladas_m.safetensors
+...
+```
