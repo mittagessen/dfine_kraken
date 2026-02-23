@@ -13,6 +13,12 @@ architecture introduced by this rework which will eventually become kraken 7.0.
 The models produced by this repository are *not* going to be compatible with
 earlier kraken versions.
 
+For the latest stable release run:
+
+```bash
+$ pip install dfine_kraken
+```
+
 Clone the repository and run:
 
 ```bash
