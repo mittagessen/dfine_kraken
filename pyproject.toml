@@ -1,5 +1,57 @@
-[project]
-
 [build-system]
-requires = ["pbr>=5.7.0", "setuptools>=36.6.0,<70.0.0", "wheel"]
-build-backend = "pbr.build"
+requires = ["hatchling", "versioningit"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dfine_kraken"
+dynamic = ["version"]
+description = "Segmentation with D-FINE for kraken"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.14"
+authors = [
+    {name = "Benjamin Kiessling", email = "mittagessen@l.unchti.me"},
+]
+keywords = ["ocr", "htr"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: GPU",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "kraken~=7.0.0b2",
+    "torchmetrics[detection]",
+    "rich",
+    "albumentations",
+]
+
+[project.urls]
+Homepage = "https://kraken.re"
+
+[project.scripts]
+dfine = "dfine.cli:dfine"
+
+[project.entry-points."kraken.models"]
+DFINEModel = "dfine.dfine:DFINEModel"
+
+[project.entry-points."kraken.lightning_modules"]
+dfine = "dfine.model:DFINESegmentationModel"
+
+[project.entry-points."kraken.configs"]
+DFINESegmentationTrainingDataConfig = "dfine.configs:DFINESegmentationTrainingDataConfig"
+DFINESegmentationTrainingConfig = "dfine.configs:DFINESegmentationTrainingConfig"
+
+[tool.hatch.version]
+source = "versioningit"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dfine"]
