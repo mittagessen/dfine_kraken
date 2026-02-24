@@ -26,7 +26,7 @@ def _normalize_class_mapping(class_mapping: dict[str, dict[str, int]]) -> dict[s
 class DFINEModel(nn.Module, SegmentationBaseModel):
 
     model_type = ['segmentation']
-    _kraken_min_version = '7.0.0'
+    _kraken_min_version = '6.99.99'
 
     def __init__(self, **kwargs):
         """
