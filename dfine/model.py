@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Optional, Union
 from torch.optim import lr_scheduler
 from torchvision.ops import box_convert
 from lightning.pytorch.callbacks import EarlyStopping
+from lightning.pytorch.utilities.memory import (garbage_collection_cuda,
+                                                is_oom_error)
 from torchmetrics.detection import MeanAveragePrecision
 from torch.utils.data import DataLoader, Subset, random_split
 
@@ -256,15 +258,28 @@ class DFINESegmentationModel(L.LightningModule):
                                         class_metrics=True,
                                         extended_summary=True)
 
+        self.oom_count = 0
+
     def forward(self, x):
         return self.net(x)
 
     def training_step(self, batch, batch_idx):
-        loss = model_step(self.net, self.criterion, batch)
-        total_loss = sum(loss.values())
-        if torch.isnan(total_loss) or torch.isinf(total_loss):
-            logger.warning(f'NaN/Inf loss detected at batch {batch_idx}, replacing with zero loss')
-            total_loss = 0.0 * sum(p.sum() for p in self.net.parameters() if p.requires_grad)
+        try:
+            loss = model_step(self.net, self.criterion, batch)
+            total_loss = sum(loss.values())
+            if torch.isnan(total_loss) or torch.isinf(total_loss):
+                logger.warning(f'NaN/Inf loss detected at batch {batch_idx}, replacing with zero loss')
+                total_loss = 0.0 * sum(p.sum() for p in self.net.parameters() if p.requires_grad)
+        except RuntimeError as e:
+            if is_oom_error(e):
+                self.oom_count += 1
+                logger.warning(f'Out of memory error in trainer. Skipping batch and freeing caches ({self.oom_count}/25).')
+                garbage_collection_cuda()
+                if self.oom_count >= 25:
+                    raise RuntimeError('Training aborted after 25 OOM errors.') from e
+                return
+            else:
+                raise
         self.log('loss',
                  total_loss,
                  batch_size=batch['images'].shape[0],
