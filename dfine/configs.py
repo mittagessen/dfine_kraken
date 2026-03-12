@@ -54,8 +54,7 @@ class DFINESegmentationTestDataConfig(DFINESegmentationTrainingDataConfig):
 
 base_cfg = {
     "HGNetv2": {
-        "pretrained": False,
-        "local_model_dir": "weight/hgnetv2/",
+        "pretrained": True,
         "freeze_stem_only": True,
     },
     "HybridEncoder": {
@@ -100,11 +99,10 @@ base_cfg = {
 sizes_cfg = {
     "nano": {
         "HGNetv2": {
-            "name": "B0",
+            "name": "hgnetv2_b0.ssld_stage1_in22k_in1k",
             "return_idx": [2, 3],
             "freeze_at": -1,
             "freeze_norm": False,
-            "use_lab": True,
         },
         "HybridEncoder": {
             "in_channels": [512, 1024],
@@ -128,11 +126,10 @@ sizes_cfg = {
     },
     "small": {
         "HGNetv2": {
-            "name": "B0",
+            "name": "hgnetv2_b0.ssld_stage1_in22k_in1k",
             "return_idx": [1, 2, 3],
             "freeze_at": -1,
             "freeze_norm": False,
-            "use_lab": True,
         },
         "HybridEncoder": {
             "in_channels": [256, 512, 1024],
@@ -155,11 +152,10 @@ sizes_cfg = {
     },
     "medium": {
         "HGNetv2": {
-            "name": "B2",
+            "name": "hgnetv2_b2.ssld_stage1_in22k_in1k",
             "return_idx": [1, 2, 3],
             "freeze_at": -1,
             "freeze_norm": False,
-            "use_lab": True,
         },
         "HybridEncoder": {
             "in_channels": [384, 768, 1536],
@@ -183,11 +179,10 @@ sizes_cfg = {
     },
     "large": {
         "HGNetv2": {
-            "name": "B4",
+            "name": "hgnetv2_b4.ssld_stage1_in22k_in1k",
             "return_idx": [1, 2, 3],
             "freeze_at": 0,
             "freeze_norm": True,
-            "use_lab": False,
         },
         "HybridEncoder": {
             "in_channels": [512, 1024, 2048],
@@ -211,11 +206,10 @@ sizes_cfg = {
     },
     "extra_large": {
         "HGNetv2": {
-            "name": "B5",
+            "name": "hgnetv2_b5.ssld_stage1_in22k_in1k",
             "return_idx": [1, 2, 3],
             "freeze_at": 0,
             "freeze_norm": True,
-            "use_lab": False,
         },
         "HybridEncoder": {
             "in_channels": [512, 1024, 2048],

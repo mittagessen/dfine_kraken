@@ -32,6 +32,7 @@ dependencies = [
     "torchmetrics[detection]",
     "rich",
     "albumentations",
+    "timm",
 ]
 
 [project.urls]
