@@ -17,8 +17,8 @@ class DFINESegmentationTrainingConfig(TrainingConfig):
 
         kwargs.setdefault('quit', 'fixed')
         kwargs.setdefault('epochs', 50)
-        kwargs.setdefault('lrate', 1e-4)
-        kwargs.setdefault('weight_decay', 1e-5)
+        kwargs.setdefault('lrate', 2e-4)
+        kwargs.setdefault('weight_decay', 1e-4)
         super().__init__(**kwargs)
 
 
