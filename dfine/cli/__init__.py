@@ -11,6 +11,7 @@ from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrai
 
 from .train import train
 from .test import test
+from .hpo import hpo
 from .util import _load_config, to_ptl_device
 
 
@@ -40,7 +41,8 @@ Image.MAX_IMAGE_PIXELS = 20000 ** 2
                                    default_map={**Config().__dict__,
                                                 **TrainingDataConfig().__dict__,
                                                 'train': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTrainingDataConfig().__dict__},
-                                                'test': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTestDataConfig().__dict__}}))
+                                                'test': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTestDataConfig().__dict__},
+                                                'hpo': {**DFINESegmentationTrainingConfig().__dict__, **DFINESegmentationTrainingDataConfig().__dict__}}))
 @click.version_option()
 @click.pass_context
 @click.option('-v', '--verbose', default=0, count=True)
@@ -89,6 +91,7 @@ def dfine(ctx, **kwargs):
 
 dfine.add_command(train)
 dfine.add_command(test)
+dfine.add_command(hpo)
 
 if __name__ == '__main__':
     dfine()
