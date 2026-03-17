@@ -68,8 +68,6 @@ def hpo(ctx, **kwargs):
     from dfine.model import DFINESegmentationDataModule, DFINESegmentationModel
     from kraken.train.utils import KrakenTrainer
 
-    from .util import to_ptl_device
-
     params = ctx.params.copy()
     params.update(ctx.meta)
 
@@ -110,8 +108,6 @@ def hpo(ctx, **kwargs):
     logger.info(f'Data module ready: {len(data_module.train_set)} train, '
                 f'{len(data_module.val_set)} val samples')
 
-    accelerator, devices = to_ptl_device(params.get('device', 'cpu'))
-
     def objective(trial):
         """Single Optuna trial: suggest hyperparams, train, return mAP@50."""
         lrate = trial.suggest_float('lrate', 1e-6, 1e-3, log=True)
@@ -147,9 +143,9 @@ def hpo(ctx, **kwargs):
         )
 
         trainer = KrakenTrainer(
-            accelerator=accelerator,
-            devices=devices,
-            precision=params.get('precision', '32'),
+            accelerator=params.get('accelerator'),
+            devices=params.get('devices'),
+            precision=params.get('precision'),
             max_epochs=epochs,
             min_epochs=0,
             enable_progress_bar=False,
