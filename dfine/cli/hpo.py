@@ -144,7 +144,7 @@ def hpo(ctx, **kwargs):
 
         trainer = KrakenTrainer(
             accelerator=params.get('accelerator'),
-            devices=params.get('devices'),
+            devices=params.get('device'),
             precision=params.get('precision'),
             max_epochs=epochs,
             min_epochs=0,
