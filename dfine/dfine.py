@@ -165,6 +165,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
             im: Input image.
         """
         import shapely.geometry as geom
+        import shapely
 
         from collections import defaultdict
         from torchvision.ops import box_convert
@@ -202,7 +203,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         lines = []
         for box, label in zip(boxes, labels):
             if label in self.line_map:
-                line_ls = geom.Polygon(box.tolist()).centroid
+                line_ls = shapely.box(*box.tolist()).centroid
                 regs = []
                 for reg_id, reg in _shp_regs.items():
                     if reg.contains(line_ls):
