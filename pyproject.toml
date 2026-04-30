@@ -28,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "kraken~=7.0.0b2",
+    "kraken~=7.0.2",
     "torchmetrics[detection]",
     "rich",
     "albumentations",
