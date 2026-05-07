@@ -406,6 +406,14 @@ class DFINESegmentationModel(L.LightningModule):
                                         num_top_queries=self.hparams.config.num_top_queries,
                                         class_mapping=set_class_mapping)
             else:
+                # Resize encoder/decoder spatial caches if the fine-tune
+                # image size differs from the loaded model's.
+                data_image_size = tuple(self.trainer.datamodule.hparams.data_config.image_size)
+                net_image_size = tuple(self.net.user_metadata.get('image_size', data_image_size))
+                if data_image_size != net_image_size:
+                    logger.info(f'Resizing input from {net_image_size} to {data_image_size}.')
+                    self.net.resize_input(data_image_size)
+
                 _raw = self.net.user_metadata.get('class_mapping', set_class_mapping)
                 net_class_mapping = {'lines': dict(_raw.get('lines', {})),
                                      'regions': dict(_raw.get('regions', {}))}
@@ -478,10 +486,34 @@ class DFINESegmentationModel(L.LightningModule):
                         raise ValueError(f'invalid resize parameter value {resize_mode}')
 
                 num_classes = _num_classes_from_mapping(net_class_mapping)
-                self.trainer.datamodule.train_set.dataset.class_mapping = net_class_mapping
-                self.trainer.datamodule.train_set.dataset.num_classes = num_classes
-                self.trainer.datamodule.val_set.dataset.class_mapping = net_class_mapping
-                self.trainer.datamodule.val_set.dataset.num_classes = num_classes
+
+                # Build old-to-new index remap from the current dataset
+                # class_mapping (which was used to populate dataset.targets) to
+                # the freshly computed net_class_mapping. Train and val Subsets
+                # may share or have separate underlying datasets — handle both.
+                old_class_mapping = self.trainer.datamodule.train_set.dataset.class_mapping
+                idx_remap: dict[int, int] = {}
+                for section in ('lines', 'regions'):
+                    new_section = net_class_mapping.get(section, {})
+                    for name, old_idx in old_class_mapping.get(section, {}).items():
+                        if name in new_section:
+                            idx_remap[old_idx] = new_section[name]
+
+                processed: set[int] = set()
+                for sub in (self.trainer.datamodule.train_set, self.trainer.datamodule.val_set):
+                    ds = sub.dataset
+                    if id(ds) in processed:
+                        continue
+                    processed.add(id(ds))
+                    ds.remap_targets(idx_remap)
+                    ds.class_mapping = net_class_mapping
+                    ds.num_classes = num_classes
+
+                # Datamodule.setup() captured class_mapping into data_config
+                # before the remap; refresh it so on_load_checkpoint
+                # reconstructs the net at the correct (post-remap) size.
+                self.trainer.datamodule.hparams.data_config.line_class_mapping = dict(net_class_mapping['lines'])
+                self.trainer.datamodule.hparams.data_config.region_class_mapping = dict(net_class_mapping['regions'])
 
             self._full_class_mapping = {'lines': dict(self.trainer.datamodule.train_set.dataset.class_mapping['lines']),
                                         'regions': dict(self.trainer.datamodule.train_set.dataset.class_mapping['regions'])}
@@ -546,6 +578,8 @@ class DFINESegmentationModel(L.LightningModule):
         models = load_models(path, tasks=['segmentation'])
         if len(models) != 1:
             raise ValueError(f'Found {len(models)} segmentation models in model file.')
+        config.model_variant = models[0].user_metadata['model_variant']
+        config.num_top_queries = models[0].user_metadata['num_top_queries']
         return cls(config=config, model=models[0])
 
     def configure_callbacks(self):

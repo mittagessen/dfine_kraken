@@ -208,6 +208,25 @@ class XMLDetectionDataset(Dataset):
     def __len__(self):
         return len(self.imgs)
 
+    def remap_targets(self, idx_remap: dict[int, int]) -> None:
+        """
+        Translates target label indices from old to new according to ``idx_remap``.
+
+        Boxes whose old index is not present in ``idx_remap`` are dropped.
+        Caller is responsible for updating ``self.class_mapping`` and
+        ``self.num_classes`` afterwards.
+        """
+        new_targets = []
+        for obj_dict in self.targets:
+            new_obj = defaultdict(list)
+            for old_idx, boxes in obj_dict.items():
+                new_idx = idx_remap.get(old_idx)
+                if new_idx is None:
+                    continue
+                new_obj[new_idx].extend(boxes)
+            new_targets.append(new_obj)
+        self.targets = new_targets
+
     def close_mosaic(self):
         self.mosaic_prob = 0.0
 

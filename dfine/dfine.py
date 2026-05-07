@@ -116,6 +116,26 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         decoder.num_classes = output_size
         self.num_classes = output_size
 
+    def resize_input(self, image_size: tuple[int, int]) -> None:
+        """
+        Reconfigures the model for a new input image size.
+
+        Rebuilds the encoder positional embeddings and decoder anchor cache
+        bound to ``eval_spatial_size``. No learned weights are modified.
+        """
+        self.user_metadata['image_size'] = image_size
+
+        # Encoder pos_embed{idx} are stored as plain tensor attributes.
+        self.encoder.eval_spatial_size = image_size
+        self.encoder._reset_parameters()
+
+        # Decoder anchors / valid_mask are registered buffers — preserve device.
+        self.decoder.eval_spatial_size = image_size
+        device = self.decoder.anchors.device
+        anchors, valid_mask = self.decoder._generate_anchors()
+        self.decoder.anchors = anchors.to(device)
+        self.decoder.valid_mask = valid_mask.to(device)
+
     def forward(self, x, targets=None):
         x = self.backbone(x)
         x = self.encoder(x)
