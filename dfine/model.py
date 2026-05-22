@@ -22,7 +22,7 @@ import lightning.pytorch as L
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Union
 from torch.optim import lr_scheduler
-from torchvision.ops import box_convert
+from torchvision.ops import box_convert, nms
 from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.utilities.memory import (garbage_collection_cuda,
                                                 is_oom_error)
@@ -341,9 +341,19 @@ class DFINESegmentationModel(L.LightningModule):
         index = index // self.num_classes
         pred_boxes = pred_boxes.gather(dim=1, index=index.unsqueeze(-1).repeat(1, 1, pred_boxes.shape[-1]))
 
-        preds = [dict(labels=lab,
-                      boxes=box,
-                      scores=sco) for lab, box, sco in zip(pred_labels, pred_boxes, pred_scores)]
+        nms_iou = self.hparams.config.nms_iou
+        if nms_iou is not None:
+            filtered_labels, filtered_boxes, filtered_scores = [], [], []
+            for labs, boxes, scores in zip(pred_labels, pred_boxes, pred_scores):
+                keep = nms(boxes, scores, iou_threshold=nms_iou)
+                filtered_labels.append(labs[keep])
+                filtered_boxes.append(boxes[keep])
+                filtered_scores.append(scores[keep])
+            preds = [dict(labels=lab, boxes=box, scores=sco)
+                     for lab, box, sco in zip(filtered_labels, filtered_boxes, filtered_scores)]
+        else:
+            preds = [dict(labels=lab, boxes=box, scores=sco)
+                     for lab, box, sco in zip(pred_labels, pred_boxes, pred_scores)]
         targets = [dict(labels=target['labels'],
                         boxes=box_convert(target['boxes'], in_fmt='cxcywh', out_fmt='xyxy') * img_size) for target in batch['target']]
 

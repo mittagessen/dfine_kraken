@@ -128,6 +128,11 @@ def _build_class_diagnostics(model_mapping, dataset_mapping, dataset_stats, obse
                    'the one-to-one mapping, `custom` uses user-provided mappings.')
 @click.option('--line-class-mapping', type=click.UNPROCESSED, hidden=True)
 @click.option('--region-class-mapping', type=click.UNPROCESSED, hidden=True)
+@click.option('--nms-iou',
+              'nms_iou',
+              type=float,
+              default=None,
+              help='IoU threshold for NMS post-processing. If not set, no NMS is applied.')
 @click.argument('test_set', nargs=-1, callback=_expand_gt, type=click.Path(exists=False, dir_okay=False))
 def test(ctx, **kwargs):
     """

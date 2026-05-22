@@ -49,6 +49,7 @@ class DFINESegmentationTestDataConfig(DFINESegmentationTrainingDataConfig):
     """
     def __init__(self, **kwargs):
         self.test_class_mapping_mode = kwargs.pop('test_class_mapping_mode', 'full')
+        self.nms_iou = kwargs.pop('nms_iou', None)
         super().__init__(**kwargs)
 
 
