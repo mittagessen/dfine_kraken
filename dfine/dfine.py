@@ -142,7 +142,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         x = self.decoder(x, targets)
         return x
 
-    def prepare_for_inference(self, config: 'SegmentationInferenceConfig'):
+    def prepare_for_inference(self, config: 'SegmentationInferenceConfig', nms_iou: float=None):
         """
         Configures the model for inference.
         """
@@ -150,6 +150,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
 
         self.eval()
         self._inf_config = config
+        self._nms_iou = nms_iou
 
         self._fabric = Fabric(accelerator=self._inf_config.accelerator,
                               devices=self._inf_config.device,
@@ -188,7 +189,7 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         import shapely
 
         from collections import defaultdict
-        from torchvision.ops import box_convert
+        from torchvision.ops import box_convert, nms as torchvision_nms
         from kraken.containers import Segmentation, Region, BBoxLine
 
         orig_size = self._fabric.to_device(torch.tensor(tuple(im.size * 2)))
@@ -209,7 +210,14 @@ class DFINEModel(nn.Module, SegmentationBaseModel):
         boxes = boxes.squeeze()
         labels = labels.squeeze()
         mask = scores >= 0.5
-        boxes, labels = boxes[mask].cpu(), labels[mask].cpu().tolist()
+        boxes, labels, scores = boxes[mask], labels[mask], scores[mask]
+
+        # apply NMS if iou threshold is set
+        if self._nms_iou is not None:
+            keep = torchvision_nms(boxes, scores, iou_threshold=self._nms_iou)
+            boxes, labels = boxes[keep].cpu(), labels[keep].cpu().tolist()
+        else:
+            boxes, labels = boxes.cpu(), labels.cpu().tolist()
 
         regions = defaultdict(list)
         _shp_regs = {}

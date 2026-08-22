@@ -12,6 +12,7 @@ from dfine.configs import DFINESegmentationTrainingConfig, DFINESegmentationTrai
 from .train import train
 from .test import test
 from .hpo import hpo
+from .infer import infer
 from .util import _load_config, to_ptl_device
 
 
@@ -92,6 +93,7 @@ def dfine(ctx, **kwargs):
 dfine.add_command(train)
 dfine.add_command(test)
 dfine.add_command(hpo)
+dfine.add_command(infer)
 
 if __name__ == '__main__':
     dfine()
