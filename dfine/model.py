@@ -238,6 +238,10 @@ class DFINESegmentationModel(L.LightningModule):
     A LightningModule encapsulating the training setup for a region object
     detection model.
     """
+  
+    _config_class = DFINESegmentationTrainingConfig
+    _data_config_class = DFINESegmentationTrainingDataConfig
+  
     def __init__(self,
                  config: DFINESegmentationTrainingConfig,
                  model: Optional['BaseModel'] = None):
