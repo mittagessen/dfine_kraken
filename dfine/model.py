@@ -20,7 +20,7 @@ import logging
 import lightning.pytorch as L
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 from torch.optim import lr_scheduler
 from torchvision.ops import box_convert
 from lightning.pytorch.callbacks import EarlyStopping
@@ -31,15 +31,16 @@ from torch.utils.data import DataLoader, Subset, random_split
 
 from kraken.lib.xml import XMLPage
 from kraken.models import create_model
+from kraken.train.base import KrakenTrainerModule
 from kraken.train.utils import TestMetrics, configure_optimizer_and_lr_scheduler
 
+from dfine.dfine import DFINEModel
 from dfine.modules import build_criterion
 from dfine.dataset import XMLDetectionDataset, collate_batch
 from dfine.configs import (DFINESegmentationTrainingDataConfig,
                            DFINESegmentationTrainingConfig)
 
 if TYPE_CHECKING:
-    from os import PathLike
     from kraken.models import BaseModel
     from kraken.containers import Segmentation
 
@@ -233,11 +234,19 @@ class DFINESegmentationDataModule(L.LightningDataModule):
                           collate_fn=collate_batch)
 
 
-class DFINESegmentationModel(L.LightningModule):
+class DFINESegmentationModel(KrakenTrainerModule):
     """
     A LightningModule encapsulating the training setup for a region object
     detection model.
     """
+
+    _task = 'segmentation'
+    _arch = 'dfine'
+    _model_class = DFINEModel
+    _config_class = DFINESegmentationTrainingConfig
+    _data_config_class = DFINESegmentationTrainingDataConfig
+    _data_module_class = DFINESegmentationDataModule
+
     def __init__(self,
                  config: DFINESegmentationTrainingConfig,
                  model: Optional['BaseModel'] = None):
@@ -317,11 +326,11 @@ class DFINESegmentationModel(L.LightningModule):
         precision = _mean_valid(metrics['precision'][iou_50_idx, :, :, 0, -1])
         recall = _mean_valid(metrics['recall'][iou_50_idx, :, 0, -1])
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall).item() > 0 else precision.new_tensor(0.0)
-        self.log_dict({'mAP_50': metrics['map_50'],
-                       'mAP_50_95': metrics['map'],
-                       'precision': precision,
-                       'recall': recall,
-                       'f1': f1},
+        self.log_dict({'val_mAP_50': metrics['map_50'],
+                       'val_mAP_50_95': metrics['map'],
+                       'val_precision': precision,
+                       'val_recall': recall,
+                       'val_f1': f1},
                       on_epoch=True,
                       prog_bar=True,
                       logger=True)
@@ -525,67 +534,48 @@ class DFINESegmentationModel(L.LightningModule):
         elif stage == 'test':
             self.num_classes = _num_classes_from_mapping(self.trainer.datamodule.test_set.dataset.class_mapping)
 
-    def on_load_checkpoint(self, checkpoint):
+    def _build_net_from_checkpoint(self, checkpoint):
         """
-        Reconstruct the model from the spec here and not in setup() as
-        otherwise the weight loading will fail.
+        Reconstruct the model from the checkpoint configuration here and not
+        in setup() as otherwise the weight loading will fail.
         """
-        module_config = checkpoint.get('_module_config')
-        if isinstance(module_config, DFINESegmentationTrainingConfig):
-            model_variant = module_config.model_variant
-            num_top_queries = module_config.num_top_queries
-        elif isinstance(module_config, dict):
-            model_variant = module_config.get('model_variant', self.hparams.config.model_variant)
-            num_top_queries = module_config.get('num_top_queries', self.hparams.config.num_top_queries)
-        else:
-            raise ValueError('Checkpoint is not a D-FINE model.')
-
+        config = checkpoint['_module_config']
         data_config = checkpoint['datamodule_hyper_parameters']['data_config']
-        full_class_mapping = {'lines': data_config.line_class_mapping,
-                              'regions': data_config.region_class_mapping}
-        self.net = create_model('DFINEModel',
-                                model_variant=model_variant,
-                                image_size=data_config.image_size,
-                                num_top_queries=num_top_queries,
-                                class_mapping=full_class_mapping)
-        self._full_class_mapping = full_class_mapping
-        self.net.user_metadata['_full_class_mapping'] = full_class_mapping
+        self._full_class_mapping = {'lines': data_config.line_class_mapping,
+                                    'regions': data_config.region_class_mapping}
+        return create_model('DFINEModel',
+                            model_variant=config.model_variant,
+                            image_size=data_config.image_size,
+                            num_top_queries=config.num_top_queries,
+                            class_mapping=self._full_class_mapping)
+
+    def _post_load_checkpoint(self, checkpoint):
+        super()._post_load_checkpoint(checkpoint)
+        ckpt_config = checkpoint['_module_config']
+        self.hparams.config.model_variant = ckpt_config.model_variant
+        self.hparams.config.num_top_queries = ckpt_config.num_top_queries
+        self.net.user_metadata['_full_class_mapping'] = self._full_class_mapping
         if '_canonical_class_mapping' in checkpoint:
             self.net.user_metadata['class_mapping'] = {'lines': dict(checkpoint['_canonical_class_mapping'].get('lines', {})),
                                                         'regions': dict(checkpoint['_canonical_class_mapping'].get('regions', {}))}
 
         self.criterion = build_criterion(model_variant=self.hparams.config.model_variant,
-                                         class_mapping=full_class_mapping)
-        self.num_classes = _num_classes_from_mapping(full_class_mapping)
+                                         class_mapping=self._full_class_mapping)
+        self.num_classes = _num_classes_from_mapping(self._full_class_mapping)
 
-    def on_save_checkpoint(self, checkpoint):
-        """
-        Save hyperparameters a second time so we can set parameters that
-        shouldn't be overwritten in on_load_checkpoint.
-        """
-        checkpoint['_module_config'] = self.hparams.config
+    def _save_checkpoint_extras(self, checkpoint):
         if self.net and 'class_mapping' in self.net.user_metadata:
             checkpoint['_canonical_class_mapping'] = self.net.user_metadata['class_mapping']
 
     @classmethod
-    def load_from_weights(cls,
-                          path: Union[str, 'PathLike'],
-                          config: DFINESegmentationTrainingConfig) -> 'DFINESegmentationModel':
-        """
-        Initializes the module from a model weights file.
-        """
-        from kraken.models import load_models
-        models = load_models(path, tasks=['segmentation'])
-        if len(models) != 1:
-            raise ValueError(f'Found {len(models)} segmentation models in model file.')
-        config.model_variant = models[0].user_metadata['model_variant']
-        config.num_top_queries = models[0].user_metadata['num_top_queries']
-        return cls(config=config, model=models[0])
+    def _post_load_weights(cls, model, config):
+        config.model_variant = model.user_metadata['model_variant']
+        config.num_top_queries = model.user_metadata['num_top_queries']
 
     def configure_callbacks(self):
         callbacks = []
         if self.hparams.config.quit == 'early':
-            callbacks.append(EarlyStopping(monitor='mAP_50',
+            callbacks.append(EarlyStopping(monitor='val_mAP_50',
                                            mode='max',
                                            patience=self.hparams.config.lag,
                                            stopping_threshold=1.0))

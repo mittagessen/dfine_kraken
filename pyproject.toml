@@ -28,7 +28,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "kraken>=7.0.2,<8.0.0",
+    "kraken>=7.1,<8.0.0",
     "torchmetrics[detection]",
     "rich",
     "albumentations",
@@ -45,6 +45,9 @@ dfine = "dfine.cli:dfine"
 DFINEModel = "dfine.dfine:DFINEModel"
 
 [project.entry-points."kraken.lightning_modules"]
+dfine = "dfine.model:DFINESegmentationModel"
+
+[project.entry-points."kraken.archs.segmentation"]
 dfine = "dfine.model:DFINESegmentationModel"
 
 [project.entry-points."kraken.configs"]
